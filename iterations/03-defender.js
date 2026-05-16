@@ -1275,79 +1275,29 @@ function createFrontGame(refs, T) {
       }
     }
 
-    // --- Target column — single column, 4 bricks DEEP --------------------
-    // colDepth 4 = full bright front face. 3 = first brick gone, next layer
-    // showing slightly recessed. 2 = darker, more recessed. 1 = deepest brick
-    // almost broken. 0 = sky showing through (a notch in the wall).
+    // --- Target column — 4 stacked bricks; one removed per clean hit ------
+    // Each clean hit removes the topmost remaining brick (the wall crumbles
+    // from the top). After 4 hits, all bricks are gone — empty sky shows
+    // through. Same brick rendering as the rest of the gatehouse face —
+    // no special frame, no inset, no darkening.
     const colX = TARGET_COL_X;
-    const colY = F_WALL_TOP;
     const colW = F_BRICK_W;
-    const colH = F_BRICK_H * FRONT_ROWS;
-    if (state.colDepth >= 1) {
-      // Pick brightness + inset by remaining depth.
-      const depthMap = {
-        4: { fill: '#7a6a4f', inset: 0 },         // bright front face (untouched)
-        3: { fill: '#6a5b42', inset: 2 },         // 1st layer gone — 2nd brick exposed
-        2: { fill: '#4a4135', inset: 5 },         // 2nd layer gone — 3rd brick visible
-        1: { fill: '#2e2820', inset: 8 },         // 3rd layer gone — last brick almost broken
-      };
-      const dm = depthMap[state.colDepth];
-      // Empty notch around the inset brick (the void where the front layer was).
-      if (dm.inset > 0) {
-        ctx.fillStyle = T.bg;
-        ctx.fillRect(colX + 0.5, colY + 0.5, colW - 1, colH - 1);
-      }
-      // Inset brick (the next layer of the column showing through).
-      ctx.fillStyle = dm.fill;
-      ctx.fillRect(
-        colX + dm.inset + 0.5,
-        colY + dm.inset + 0.5,
-        colW - 1 - dm.inset * 2,
-        colH - 1 - dm.inset * 2
-      );
-      // Outline.
+    const firstVisibleRow = FRONT_ROWS - state.colDepth;
+    for (let r = firstVisibleRow; r < FRONT_ROWS; r++) {
+      const y = F_WALL_TOP + r * F_BRICK_H;
+      ctx.fillStyle = (r + TARGET_COL) % 2 ? '#3a342c' : '#4a4135';
+      ctx.fillRect(colX + 0.5, y + 0.5, colW - 1, F_BRICK_H - 1);
       ctx.strokeStyle = '#15171a';
       ctx.lineWidth = 1;
-      ctx.strokeRect(
-        colX + dm.inset + 0.5,
-        colY + dm.inset + 0.5,
-        colW - 1 - dm.inset * 2,
-        colH - 1 - dm.inset * 2
-      );
-      // Subtle horizontal mortar lines so the column reads as 4 stacked bricks.
-      ctx.strokeStyle = 'rgba(21,23,26,0.7)';
-      for (let r = 1; r < FRONT_ROWS; r++) {
-        const ly = colY + r * F_BRICK_H + 0.5;
-        ctx.beginPath();
-        ctx.moveTo(colX + dm.inset, ly);
-        ctx.lineTo(colX + colW - dm.inset, ly);
-        ctx.stroke();
-      }
-      // Hit-flash overlay (blood pulse for ~0.5s after a clean hit).
-      if (state.hitFlash > 0) {
-        ctx.save();
-        ctx.globalAlpha = state.hitFlash * 0.7;
-        ctx.fillStyle = T.blood;
-        ctx.fillRect(
-          colX + dm.inset + 0.5,
-          colY + dm.inset + 0.5,
-          colW - 1 - dm.inset * 2,
-          colH - 1 - dm.inset * 2
-        );
-        ctx.restore();
-      }
-    } else {
-      // Column fully broken through — sky / void shows through.
-      ctx.fillStyle = T.bg;
-      ctx.fillRect(colX + 0.5, colY + 0.5, colW - 1, colH - 1);
-      ctx.strokeStyle = T.blood;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(colX + 0.5, colY + 0.5, colW - 1, colH - 1);
-      // Daylight glow through the notch.
+      ctx.strokeRect(colX + 0.5, y + 0.5, colW - 1, F_BRICK_H - 1);
+    }
+    // Hit-flash on the row that JUST disappeared.
+    if (state.hitFlash > 0 && firstVisibleRow > 0) {
+      const flashY = F_WALL_TOP + (firstVisibleRow - 1) * F_BRICK_H;
       ctx.save();
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = T.amber;
-      ctx.fillRect(colX + 2, colY + 2, colW - 4, colH - 4);
+      ctx.globalAlpha = state.hitFlash * 0.6;
+      ctx.fillStyle = T.blood;
+      ctx.fillRect(colX + 0.5, flashY + 0.5, colW - 1, F_BRICK_H - 1);
       ctx.restore();
     }
     // Wall base line.
