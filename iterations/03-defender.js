@@ -51,7 +51,12 @@ const DISEASE_DAMAGE_BY_INDEX = [70, 60, 48, 34, 22, 12];
 const FRONT_MAX_SHOTS = 6;
 const FRONT_COLS      = 8;
 const FRONT_ROWS      = 4;
-const HITS_TO_FELL    = 3;       // hits in one column to win
+const HITS_TO_FELL    = 3;       // hits to punch through the single column (3 bricks deep)
+// Sweet-spot aiming: a hit requires launchR to be within tolerance of SWEET_R.
+const FRONT_SWEET_R   = 22;      // ideal pull-back radius (px) for a clean hit
+const FRONT_SWEET_TOL = 5.5;     // ±5.5px tolerance window around the sweet spot
+// Straight-line flight duration (constant rate, no gravity, no arc).
+const FRONT_FLIGHT_MS = 800;     // ~800ms boulder-flight
 
 // ---- Color tokens -------------------------------------------------------
 function readTokens(rootEl) {
@@ -548,14 +553,23 @@ function createSideGame(refs, T) {
 }
 
 // =========================================================================
-// FRONT GAME — Saxon castle, column-knock
+// FRONT GAME — Saxon castle, single-column knock-through
 // =========================================================================
-// Visual: long beam arm with growing boulder while pulling back, distant castle
-// silhouette with crenellated towers, a brick grid on the gatehouse face.
+// Visual: small wheeled catapult low in the foreground (Defender-of-the-Crown
+// scale — the machine is a stout little thing, the castle dominates). Boulder
+// grows dramatically as you pull back (depth illusion: it's coming toward the
+// camera). Release: arm whips forward and the boulder travels in a STRAIGHT
+// LINE to the target column on the wall, shrinking dramatically as it
+// recedes into the distance.
 //
-// Rules (independent of side game):
-//   6 shots, boulder only. Hit a column 3 times to topple it = VICTORY.
-//   6 shots without a column reaching 3 hits = DEFEAT.
+// Rules:
+//   ONE target column on the gatehouse face, three bricks DEEP (depth, not
+//   height). Each clean hit removes one depth-layer, revealing a darker brick
+//   behind it. Three clean hits = punch-through = VICTORY.
+//   Sweet-spot aiming: a shot is a CLEAN HIT only if launchR is within
+//   FRONT_SWEET_TOL of FRONT_SWEET_R. Too short → falls short. Too long →
+//   overshoots. The column is unaffected on misses.
+//   6 shots total. If the column hasn't been broken through after 6, DEFEAT.
 function createFrontGame(refs, T) {
   const { canvas, ctx, controls } = refs;
 
@@ -571,28 +585,37 @@ function createFrontGame(refs, T) {
   const F_WALL_TOP   = HORIZON - F_BRICK_H * FRONT_ROWS;
   const F_WALL_BASE  = HORIZON;
 
-  // Catapult (foreground, viewed from behind).
-  const BASE_CX      = W / 2;
-  const BASE_TOP_Y   = GROUND_Y - 26;     // top of wagon-bed
-  const BASE_HALF_T  = 24;                // top half-width
-  const BASE_HALF_B  = 44;                // bottom half-width
+  // The ONE target column lives in the centre of the gatehouse face.
+  const TARGET_COL   = Math.floor(FRONT_COLS / 2);             // 4 (mid-right of centre)
+  const TARGET_COL_X = F_WALL_X + TARGET_COL * F_BRICK_W;      // left edge of column
+  const TARGET_COL_CX = TARGET_COL_X + F_BRICK_W / 2;          // centre x of column
+  // Vertical band for the column — the brick stack within the wall.
+  const TARGET_COL_Y_TOP = F_WALL_TOP;
+  const TARGET_COL_Y_MID = F_WALL_TOP + (F_BRICK_H * FRONT_ROWS) / 2;
 
-  // Beam arm — per spec: ~50% of canvas height (long, dominant).
-  const BEAM_LEN     = 200;
-  const BEAM_WIDTH   = 5;
-  // Rest pose: tilted forward (away from camera, toward the wall).
-  // Up = -y. Forward = -y biased toward HORIZON. Use angle from vertical.
-  // 0 = straight up. Positive = tilted FORWARD (toward wall = up-screen).
-  // Negative = tilted BACKWARD (toward camera = leans down-screen toward viewer).
-  // Rest: +0.35 rad ≈ 20° forward.
-  const BEAM_REST_RAD = 0.35;
+  // Catapult (foreground, viewed from behind). Small and stout — per spec,
+  // the catapult sits in the lower 25-30% of the canvas, NOT dominating.
+  const BASE_CX      = W / 2;
+  const BASE_TOP_Y   = GROUND_Y - 18;     // top of wagon-bed (shallow)
+  const BASE_HALF_T  = 22;                // top half-width  (~44 wide)
+  const BASE_HALF_B  = 34;                // bottom half-width (~68 wide)
+
+  // Beam arm — SHRUNK 4× per spec. Was 200px; now ~50px.
+  // Proportional to the wagon (~68px wide). Reads as a stout beam, not a pole.
+  const BEAM_LEN     = 50;
+  const BEAM_WIDTH   = 4;
+  // Rest pose: slight forward tilt. 0 = straight up. + = forward (toward wall).
+  const BEAM_REST_RAD = 0.30;
   // Max pullback: arm rotates BACKWARD past vertical, toward the viewer.
-  // -0.7 rad ≈ -40° from vertical (leaning back toward camera).
   const BEAM_PULL_RAD = 1.05;             // total swing from rest at full pull
 
-  // Boulder size animation at the bucket (per spec: 5–6 → ~22).
-  const BOULDER_R_REST = 6;
-  const BOULDER_R_FULL = 22;
+  // Boulder size animation at the bucket — dramatic depth illusion.
+  // Rest = tiny; full pullback = the stone is up against the lens.
+  const BOULDER_R_REST = 6;               // small ball at rest (~6px)
+  const BOULDER_R_FULL = 30;              // looming stone at full pullback (~30px)
+
+  // Boulder size while in flight: launch (near camera) → impact (far/tiny).
+  const BOULDER_R_IMPACT = 2.5;           // a dot at impact (max foreshortening)
 
   // ---- Controls ---------------------------------------------------------
   const btnReset = mkButton('New siege', T);
@@ -604,23 +627,24 @@ function createFrontGame(refs, T) {
   function freshState() {
     return {
       shotsFired: 0,
-      // Column hit counters; index 0 = leftmost column.
-      colHits:    new Array(FRONT_COLS).fill(0),
-      // Per-cell fallen flag; bricks[r][c] = true if standing.
-      bricks:     Array.from({ length: FRONT_ROWS }, () =>
-        Array.from({ length: FRONT_COLS }, () => true)),
+      // Depth remaining on the single target column. Starts at 3 (full depth).
+      // Decrements on each clean hit. 0 = broken through (WIN).
+      colDepth:   HITS_TO_FELL,
       arm:        { angle: BEAM_REST_RAD, pulling: false, pullMs: 0 },
-      // Projectile in flight; world coords for collision parity with side game.
+      // Projectile in flight; uses screen-space (NOT world-space) coords now,
+      // because the flight is a direct straight-line interpolation from arm tip
+      // to target column on screen — no gravity, no arc.
       projectile: null,
-      // Launch tracking — for the FRONT view we need the boulder's launch size
-      // to feed into the in-flight depth shrink.
+      // Boulder size at the moment of release (drives the in-flight shrink).
       launchR:    BOULDER_R_REST,
-      // Most recent shot's target column (for HUD pulse + audio cue placeholder).
-      lastCol:    -1,
       lastResult: '',
+      // Visual flash on the column after a clean hit (decays per frame).
+      hitFlash:   0,
+      // Visual flash on the wall on a clean hit, plus a ground splash for
+      // short misses, near horizon for overshoots.
+      lastShotKind: 'idle',     // 'hit' | 'short' | 'over' | 'idle'
       gameOver:   false,
       won:        false,
-      wonCol:     -1,
     };
   }
 
@@ -654,75 +678,95 @@ function createFrontGame(refs, T) {
         return;
       }
       const power = Math.min(1, ms / PULL_FULL_MS);
-      const v     = V_MIN + (V_MAX - V_MIN) * power;
-      // Boulder launch size = max-pullback size (per spec).
+      // Boulder launch size = current pullback size.
       state.launchR = BOULDER_R_REST + (BOULDER_R_FULL - BOULDER_R_REST) * power;
-      fire(v);
+      fire(power);
       state.arm.angle = BEAM_REST_RAD;
     },
   });
 
-  function fire(v) {
-    // Use the side-view coord system for trajectory math (gravity, parabola).
-    // It doesn't have to "match" the front view geometrically — the front view
-    // projects world-x to screen-x via the wall band.
-    const launchX = PIVOT_X + Math.cos(ARM_REST_ANG) * ARM_LEN;
-    const launchY = PIVOT_Y + Math.sin(ARM_REST_ANG) * ARM_LEN;
-    const vx =  v * Math.cos(LAUNCH_ANGLE);
-    const vy = -v * Math.sin(LAUNCH_ANGLE);
+  // ---- Fire: spawn a straight-line projectile in SCREEN space -----------
+  // The arm whips forward visually (handled in draw via arm.angle reset),
+  // and a projectile object is created carrying its launch + target screen
+  // points plus an outcome that is decided up-front from the sweet-spot rule.
+  function fire(power) {
+    // Arm tip launch point — match the rest-pose tip position (the arm has
+    // whipped forward at this instant). We sample the same tip the draw fn
+    // would produce at BEAM_REST_RAD.
+    const launchX = BASE_CX;
+    const launchY = BASE_TOP_Y - BEAM_LEN * Math.cos(BEAM_REST_RAD);
+
+    // Outcome from sweet-spot aiming.
+    const diff = state.launchR - FRONT_SWEET_R;
+    let outcome;        // 'hit' | 'short' | 'over'
+    let targetX, targetY;
+    if (Math.abs(diff) <= FRONT_SWEET_TOL) {
+      outcome = 'hit';
+      // Aim straight at the centre of the target column on the wall plane.
+      targetX = TARGET_COL_CX;
+      targetY = TARGET_COL_Y_MID;
+    } else if (diff < 0) {
+      // Too short — boulder falls in the foreground between catapult and wall.
+      outcome = 'short';
+      // Land in the dirt band ahead of the catapult, biased toward the wall
+      // but never reaching it. Lerp landing distance with how-short-you-were.
+      const shortness = Math.min(1, -diff / (FRONT_SWEET_R - BOULDER_R_REST));
+      // shortness 0 = nearly made it; shortness 1 = barely left the cup.
+      const reach = 0.65 - 0.45 * shortness;   // 0.20..0.65 of distance to wall
+      targetX = launchX + (TARGET_COL_CX - launchX) * reach;
+      targetY = GROUND_Y - 4;                   // splash in the ground band
+    } else {
+      // Too long — boulder overshoots. Sails up & over the wall, vanishes
+      // near the top of the gatehouse / sky line.
+      outcome = 'over';
+      const overshoot = Math.min(1, diff / (BOULDER_R_FULL - FRONT_SWEET_R));
+      // Bias horizontally just past the column, but mostly the y is way above.
+      targetX = TARGET_COL_CX + 18 * (overshoot - 0.5);
+      targetY = TARGET_COL_Y_TOP - 30 - 30 * overshoot;
+    }
+
     state.projectile = {
-      x: launchX, y: launchY, vx, vy,
-      kind: 'boulder',
-      shotIndex: state.shotsFired,
+      // Straight-line interpolation parameters.
+      x0: launchX, y0: launchY,
+      x1: targetX, y1: targetY,
+      r0: state.launchR,
+      r1: BOULDER_R_IMPACT,
+      tMs: 0,
+      durMs: FRONT_FLIGHT_MS,
+      outcome,
+      // Current rendered position/size (updated in step).
+      px: launchX, py: launchY, pr: state.launchR,
     };
     state.lastResult = '';
   }
 
-  // ---- Collision (column-grain) ----------------------------------------
-  // We don't need brick-row detection for win logic — only column.
-  // A boulder is "in the wall band" when its world-x crosses WALL_X..WALL_X+WALL_W
-  // AND its world-y is within the wall's vertical band.
-  function brickColAt(x) {
-    if (x < WALL_X || x >= WALL_X + WALL_W) return -1;
-    // Map world-x to front-game column (8 cols, not 12).
-    return Math.floor(((x - WALL_X) / WALL_W) * FRONT_COLS);
-  }
-
   function applyImpact(p) {
-    const col = brickColAt(p.x);
-    if (col < 0 || col >= FRONT_COLS) {
+    if (p.outcome === 'hit') {
+      state.colDepth = Math.max(0, state.colDepth - 1);
+      const remaining = state.colDepth;
+      const removedLayer = HITS_TO_FELL - remaining;          // 1..3
+      state.hitFlash = 1.0;
+      state.lastResult = 'clean hit — depth ' + remaining + '/' + HITS_TO_FELL;
+      state.lastShotKind = 'hit';
+      // (No-op kept for clarity: removedLayer can be used for SFX later.)
+      void removedLayer;
+    } else if (p.outcome === 'short') {
       state.lastResult = 'fell short';
-      state.lastCol = -1;
-      return;
+      state.lastShotKind = 'short';
+    } else {
+      state.lastResult = 'overshot';
+      state.lastShotKind = 'over';
     }
-    state.colHits[col] = Math.min(HITS_TO_FELL, state.colHits[col] + 1);
-    state.lastCol = col;
-    // Visually drop bricks from the top of the column down as hits accumulate.
-    // Hit 1 → top row (r=0) falls. Hit 2 → middle rows. Hit 3 → all fallen.
-    const hits = state.colHits[col];
-    if (hits === 1) {
-      state.bricks[0][col] = false;
-    } else if (hits === 2) {
-      // Middle two rows (1 and 2 of 4).
-      state.bricks[1][col] = false;
-      state.bricks[2][col] = false;
-    } else if (hits >= HITS_TO_FELL) {
-      for (let r = 0; r < FRONT_ROWS; r++) state.bricks[r][col] = false;
-    }
-    state.lastResult = 'column ' + (col + 1) + ': ' + hits + '/' + HITS_TO_FELL;
   }
 
   function endShot() {
     state.shotsFired++;
     state.projectile = null;
-    // Check win.
-    for (let c = 0; c < FRONT_COLS; c++) {
-      if (state.colHits[c] >= HITS_TO_FELL) {
-        state.gameOver = true;
-        state.won      = true;
-        state.wonCol   = c;
-        return;
-      }
+    // Win = column broken through.
+    if (state.colDepth <= 0) {
+      state.gameOver = true;
+      state.won      = true;
+      return;
     }
     if (state.shotsFired >= FRONT_MAX_SHOTS) {
       state.gameOver = true;
@@ -732,21 +776,20 @@ function createFrontGame(refs, T) {
 
   // ---- Step ------------------------------------------------------------
   function step(dt) {
+    // Decay hit flash regardless of projectile state.
+    if (state.hitFlash > 0) state.hitFlash = Math.max(0, state.hitFlash - dt * 2.2);
     if (!state.projectile) return;
     const p = state.projectile;
-    p.vy += GRAVITY * dt;
-    p.x  += p.vx * dt;
-    p.y  += p.vy * dt;
-    if (p.x >= WALL_X && p.x <= WALL_X + WALL_W &&
-        p.y >= WALL_TOP_Y && p.y <= WALL_BASE_Y) {
+    p.tMs += dt * 1000;
+    const t = Math.min(1, p.tMs / p.durMs);
+    // Straight-line lerp from arm tip to target.
+    p.px = p.x0 + (p.x1 - p.x0) * t;
+    p.py = p.y0 + (p.y1 - p.y0) * t;
+    // Dramatic shrink.
+    p.pr = p.r0 + (p.r1 - p.r0) * t;
+    if (t >= 1) {
       applyImpact(p);
       endShot();
-      return;
-    }
-    if (p.y >= GROUND_Y || p.x > W + 20 || p.x < -20) {
-      applyImpact(p);
-      endShot();
-      return;
     }
   }
 
@@ -932,28 +975,26 @@ function createFrontGame(refs, T) {
   }
 
   function drawHitDots(c) {
-    // Row of dot-clusters below the canvas wall band, one cluster per column.
-    // 1-2 hits = amber dot(s); 3 hits = blood dot(s) (column down).
-    const dotR = 2.5;
-    const rowY = F_WALL_BASE + 10;
-    for (let col = 0; col < FRONT_COLS; col++) {
-      const cx = F_WALL_X + col * F_BRICK_W + F_BRICK_W / 2;
-      const hits = state.colHits[col];
-      // Always draw 3 slots (filled or empty) for clarity.
-      for (let slot = 0; slot < HITS_TO_FELL; slot++) {
-        const dx = cx + (slot - 1) * 6;
-        const filled = slot < hits;
-        if (!filled) {
-          c.fillStyle = T.rule;
-        } else if (hits >= HITS_TO_FELL) {
-          c.fillStyle = T.blood;
-        } else {
-          c.fillStyle = T.amber;
-        }
-        c.beginPath();
-        c.arc(dx, rowY, dotR, 0, Math.PI * 2);
-        c.fill();
+    // Single 3-slot cluster under the target column. Slots fill with amber
+    // for each clean hit, and the final slot turns blood when the column
+    // is fully broken through.
+    const dotR = 3;
+    const rowY = F_WALL_BASE + 12;
+    const cx   = TARGET_COL_CX;
+    const hits = HITS_TO_FELL - state.colDepth;     // 0..3
+    for (let slot = 0; slot < HITS_TO_FELL; slot++) {
+      const dx = cx + (slot - 1) * 8;
+      const filled = slot < hits;
+      if (!filled) {
+        c.fillStyle = T.rule;
+      } else if (hits >= HITS_TO_FELL) {
+        c.fillStyle = T.blood;
+      } else {
+        c.fillStyle = T.amber;
       }
+      c.beginPath();
+      c.arc(dx, rowY, dotR, 0, Math.PI * 2);
+      c.fill();
     }
   }
 
@@ -989,9 +1030,11 @@ function createFrontGame(refs, T) {
     drawCastleSilhouette(ctx);
 
     // Bricks on the gatehouse face — the WALL we're attacking.
+    // All non-target columns render normally. The TARGET column renders a
+    // single front-facing brick whose colour/inset depends on remaining depth.
     for (let r = 0; r < FRONT_ROWS; r++) {
       for (let c = 0; c < FRONT_COLS; c++) {
-        if (!state.bricks[r][c]) continue;
+        if (c === TARGET_COL) continue;             // drawn separately below
         const x = F_WALL_X + c * F_BRICK_W;
         const y = F_WALL_TOP + r * F_BRICK_H;
         ctx.fillStyle = (r + c) % 2 ? '#3a342c' : '#4a4135';
@@ -1000,6 +1043,81 @@ function createFrontGame(refs, T) {
         ctx.lineWidth = 1;
         ctx.strokeRect(x + 0.5, y + 0.5, F_BRICK_W - 1, F_BRICK_H - 1);
       }
+    }
+
+    // --- Target column — single column, 3 bricks DEEP --------------------
+    // colDepth 3 = full bright front face. 2 = darker, slightly inset (front
+    // brick gone, next layer behind). 1 = even darker / smaller. 0 = sky
+    // showing through (a notch in the wall).
+    const colX = TARGET_COL_X;
+    const colY = F_WALL_TOP;
+    const colW = F_BRICK_W;
+    const colH = F_BRICK_H * FRONT_ROWS;
+    if (state.colDepth >= 1) {
+      // Pick brightness + inset by remaining depth.
+      const depthMap = {
+        3: { fill: '#6a5b42', inset: 0 },         // bright front face
+        2: { fill: '#4a4135', inset: 3 },         // recessed darker brick
+        1: { fill: '#2e2820', inset: 6 },         // deepest darker brick
+      };
+      const dm = depthMap[state.colDepth];
+      // Empty notch around the inset brick (the void where the front layer was).
+      if (dm.inset > 0) {
+        ctx.fillStyle = T.bg;
+        ctx.fillRect(colX + 0.5, colY + 0.5, colW - 1, colH - 1);
+      }
+      // Inset brick (the next layer of the column showing through).
+      ctx.fillStyle = dm.fill;
+      ctx.fillRect(
+        colX + dm.inset + 0.5,
+        colY + dm.inset + 0.5,
+        colW - 1 - dm.inset * 2,
+        colH - 1 - dm.inset * 2
+      );
+      // Outline.
+      ctx.strokeStyle = '#15171a';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        colX + dm.inset + 0.5,
+        colY + dm.inset + 0.5,
+        colW - 1 - dm.inset * 2,
+        colH - 1 - dm.inset * 2
+      );
+      // Subtle horizontal mortar lines so the column reads as 4 stacked bricks.
+      ctx.strokeStyle = 'rgba(21,23,26,0.7)';
+      for (let r = 1; r < FRONT_ROWS; r++) {
+        const ly = colY + r * F_BRICK_H + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(colX + dm.inset, ly);
+        ctx.lineTo(colX + colW - dm.inset, ly);
+        ctx.stroke();
+      }
+      // Hit-flash overlay (blood pulse for ~0.5s after a clean hit).
+      if (state.hitFlash > 0) {
+        ctx.save();
+        ctx.globalAlpha = state.hitFlash * 0.7;
+        ctx.fillStyle = T.blood;
+        ctx.fillRect(
+          colX + dm.inset + 0.5,
+          colY + dm.inset + 0.5,
+          colW - 1 - dm.inset * 2,
+          colH - 1 - dm.inset * 2
+        );
+        ctx.restore();
+      }
+    } else {
+      // Column fully broken through — sky / void shows through.
+      ctx.fillStyle = T.bg;
+      ctx.fillRect(colX + 0.5, colY + 0.5, colW - 1, colH - 1);
+      ctx.strokeStyle = T.blood;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(colX + 0.5, colY + 0.5, colW - 1, colH - 1);
+      // Daylight glow through the notch.
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = T.amber;
+      ctx.fillRect(colX + 2, colY + 2, colW - 4, colH - 4);
+      ctx.restore();
     }
     // Wall base line.
     ctx.strokeStyle = T.rule;
@@ -1032,7 +1150,7 @@ function createFrontGame(refs, T) {
     ctx.fillStyle = T.bgElev;
     ctx.strokeStyle = T.fgMuted;
     ctx.lineWidth = 1;
-    const wheelR = 9;
+    const wheelR = 7;
     const wheelLX = BASE_CX - BASE_HALF_B + 2;
     const wheelRX = BASE_CX + BASE_HALF_B - 2;
     const wheelY  = GROUND_Y - 2;
@@ -1075,34 +1193,16 @@ function createFrontGame(refs, T) {
       armTipX = tip.tipX; armTipY = tip.tipY;
     }
 
-    // --- Projectile in flight (foreshortened depth shrink) ---------------
+    // --- Projectile in flight — STRAIGHT LINE, dramatic shrink -----------
+    // Position and radius are computed in step(); we just render here.
     if (state.projectile) {
       const p = state.projectile;
-      // Depth = 0 at launch (near camera) → 1 at the wall plane (far).
-      const depth = Math.max(0, Math.min(1, (p.x - PIVOT_X) / (WALL_X - PIVOT_X)));
-
-      // Lateral mapping: arm tip → screen-x of the column the boulder will hit.
-      const wallTargetX = F_WALL_X + ((p.x - WALL_X) / WALL_W) * F_WALL_W;
-      const px = armTipX + (wallTargetX - armTipX) * depth;
-
-      // Vertical: launch tip → horizon, plus arc lift from world parabola.
-      const launchScreenY = armTipY;
-      const wallScreenY   = HORIZON;
-      const baseY = launchScreenY + (wallScreenY - launchScreenY) * depth;
-      const arcLift = Math.max(0, (WALL_TOP_Y - p.y));
-      const py = baseY - arcLift * (0.45 + 0.35 * (1 - depth));
-
-      // Radius: starts at launchR (max-pullback size), shrinks to ~3.
-      const rNear = Math.max(8, state.launchR);
-      const rFar  = 3;
-      const r = rNear + (rFar - rNear) * depth;
-
       ctx.fillStyle = T.fg;
       ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.arc(p.px, p.py, Math.max(1, p.pr), 0, Math.PI * 2);
       ctx.fill();
-      if (r > 5) {
-        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      if (p.pr > 4) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
         ctx.lineWidth = 1;
         ctx.stroke();
       }
@@ -1110,22 +1210,39 @@ function createFrontGame(refs, T) {
 
     // --- HUD overlays ----------------------------------------------------
     // Shot counter top-left.
+    const hitsSoFar = HITS_TO_FELL - state.colDepth;
     ctx.fillStyle = T.fg;
     ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText('Shot ' + Math.min(state.shotsFired + 1, FRONT_MAX_SHOTS) +
-                 '/' + FRONT_MAX_SHOTS, 10, 8);
+    const shotLabel = state.gameOver
+      ? 'Shot ' + state.shotsFired + '/' + FRONT_MAX_SHOTS
+      : 'Shot ' + Math.min(state.shotsFired + 1, FRONT_MAX_SHOTS) +
+        '/' + FRONT_MAX_SHOTS;
+    ctx.fillText(shotLabel + '   column ' + hitsSoFar + '/' + HITS_TO_FELL, 10, 8);
     if (state.lastResult && !state.gameOver) {
-      ctx.fillStyle = T.amber;
+      ctx.fillStyle =
+        state.lastShotKind === 'hit'  ? T.blood :
+        state.lastShotKind === 'over' ? T.teal  :
+        T.amber;
       ctx.fillText(state.lastResult, 10, 24);
     }
 
-    // Power bar (parity with side game).
+    // Power bar with sweet-spot band marked.
     if (state.arm.pulling || pullT > 0.001) {
       const barX = 16, barY = H - 18, barW = 140, barH = 8;
       ctx.fillStyle = T.bgElev;
       ctx.fillRect(barX, barY, barW, barH);
+      // Sweet-spot band (the launchR power range that scores a clean hit).
+      // launchR = BOULDER_R_REST + (FULL - REST) * power → solve for power:
+      const sweetMin = (FRONT_SWEET_R - FRONT_SWEET_TOL - BOULDER_R_REST) /
+                       (BOULDER_R_FULL - BOULDER_R_REST);
+      const sweetMax = (FRONT_SWEET_R + FRONT_SWEET_TOL - BOULDER_R_REST) /
+                       (BOULDER_R_FULL - BOULDER_R_REST);
+      ctx.fillStyle = 'rgba(95,181,176,0.35)';     // teal band
+      ctx.fillRect(barX + barW * sweetMin, barY,
+                   barW * (sweetMax - sweetMin), barH);
+      // Current power fill.
       ctx.fillStyle = T.amber;
       ctx.fillRect(barX, barY, barW * pullT, barH);
       ctx.strokeStyle = T.rule;
@@ -1148,7 +1265,7 @@ function createFrontGame(refs, T) {
       ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'top';
-      ctx.fillText('hold canvas — boulder grows — release to fire', W - 10, 8);
+      ctx.fillText('hold — release in the teal band to hit', W - 10, 8);
     }
     if (state.gameOver) {
       ctx.fillStyle = state.won ? T.amber : T.blood;
@@ -1158,10 +1275,10 @@ function createFrontGame(refs, T) {
       ctx.fillText(state.won ? 'VICTORY' : 'THE SIEGE FAILS', W / 2, 80);
       ctx.fillStyle = T.fgMuted;
       ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
-      if (state.won && state.wonCol >= 0) {
-        ctx.fillText('column ' + (state.wonCol + 1) + ' has fallen', W / 2, 108);
-      } else if (!state.won) {
-        ctx.fillText('no column toppled in 6 shots', W / 2, 108);
+      if (state.won) {
+        ctx.fillText('the column is breached', W / 2, 108);
+      } else {
+        ctx.fillText('the column still stands after 6 shots', W / 2, 108);
       }
     }
   }
