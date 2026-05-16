@@ -138,7 +138,8 @@ def walk_target(target, skip_dirs):
         # Filter dirs in-place so os.walk doesn't descend into them
         dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
         rel = str(Path(root).relative_to(target)).replace("\\", "/")
-        if rel.startswith("public/cb-shapes") or "/public/cb-shapes" in rel:
+        if rel.startswith("public/cb-shapes") or "/public/cb-shapes" in rel \
+           or rel.startswith("cb-shapes") or "/cb-shapes" in rel:
             continue
         for f in files:
             yield Path(root) / f
