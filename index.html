@@ -5,14 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CATAPULT</title>
   <meta name="description" content="A five-iteration homage to the catapult / artillery video game lineage, 1972 to 2009.">
-  <link rel="stylesheet" href="styles/base.css?v=0b821c32">
-  <link rel="stylesheet" href="styles/iterations.css?v=0b821c32">
+  <link rel="stylesheet" href="styles/base.css?v=b2287a85">
+  <link rel="stylesheet" href="styles/iterations.css?v=b2287a85">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <meta name="cb" content="0b821c32">
-  <link rel="icon" type="image/svg+xml" href="/cb-shapes/11.svg?v=0b821c32">
-  <script src="/cb-badge.js?v=0b821c32" defer></script>
+  <meta name="cb" content="b2287a85">
+  <link rel="icon" type="image/svg+xml" href="/cb-shapes/50.svg?v=b2287a85">
+  <script src="/cb-badge.js?v=b2287a85" defer></script>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json?v=b2287a85">
+  <meta name="theme-color" content="#0d0e10">
+  <link rel="icon" type="image/svg+xml" sizes="192x192" href="icons/icon-192.svg?v=b2287a85">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.svg?v=b2287a85">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CATAPULT">
 </head>
 <body>
 
@@ -27,7 +36,7 @@
 </header>
 
 <figure class="lineage" aria-labelledby="lineage-caption">
-  <object data="lineage.svg?v=0b821c32" type="image/svg+xml" aria-label="Lineage diagram of five catapult games from 1972 to 2009">
+  <object data="lineage.svg?v=b2287a85" type="image/svg+xml" aria-label="Lineage diagram of five catapult games from 1972 to 2009">
     <p class="nojs-note">Lineage diagram unavailable.</p>
   </object>
   <figcaption id="lineage-caption" class="mono muted">Five iterations, three direct lines of descent.</figcaption>
@@ -150,6 +159,181 @@
     try { mount(el); }
     catch (err) { console.error('CATAPULT: mount failed for', id, err); }
   }
+</script>
+
+<!-- PWA: service worker registration, update toast, install affordances -->
+<script>
+(function () {
+  'use strict';
+
+  // ---- inline fallback styles (CSS agent may override via classes) -------
+  var STYLE_ID = 'pwa-inline-style';
+  if (!document.getElementById(STYLE_ID)) {
+    var s = document.createElement('style');
+    s.id = STYLE_ID;
+    s.textContent = [
+      '.pwa-toast{position:fixed;left:50%;bottom:1.25rem;transform:translateX(-50%);',
+      'max-width:min(28rem,calc(100vw - 2rem));background:#15171a;color:#e6e1d4;',
+      'border:1px solid #2a2c30;padding:.75rem 1rem;font-family:ui-monospace,Menlo,Consolas,monospace;',
+      'font-size:.82rem;letter-spacing:.04em;z-index:9999;cursor:pointer;',
+      'box-shadow:0 8px 24px rgba(0,0,0,.45);display:flex;align-items:center;gap:.75rem;}',
+      '.pwa-toast:hover,.pwa-toast:focus{border-color:#d4a256;outline:none;}',
+      '.pwa-toast .pwa-toast-label{color:#d4a256;text-transform:uppercase;letter-spacing:.12em;}',
+      '.pwa-toast .pwa-toast-close{margin-left:auto;color:#8a8275;background:none;border:0;cursor:pointer;font-size:1rem;padding:0 .25rem;}',
+      '.pwa-install{display:inline-block;margin-left:.75rem;padding:.35rem .8rem;',
+      'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem;letter-spacing:.08em;',
+      'text-transform:uppercase;color:#d4a256;background:transparent;border:1px solid #2a2c30;',
+      'cursor:pointer;}',
+      '.pwa-install:hover,.pwa-install:focus{border-color:#d4a256;outline:none;}',
+      '.pwa-ios-hint{position:fixed;left:1rem;right:1rem;bottom:1rem;max-width:30rem;',
+      'margin:0 auto;background:#15171a;color:#e6e1d4;border:1px solid #2a2c30;',
+      'padding:.85rem 1rem;font-family:ui-monospace,Menlo,Consolas,monospace;',
+      'font-size:.78rem;letter-spacing:.04em;z-index:9999;display:flex;align-items:center;gap:.75rem;}',
+      '.pwa-ios-hint .pwa-ios-close{margin-left:auto;color:#8a8275;background:none;border:0;cursor:pointer;font-size:1rem;padding:0 .25rem;}'
+    ].join('');
+    document.head.appendChild(s);
+  }
+
+  // ---- service worker registration --------------------------------------
+  // SW won't register under file://; that's expected and harmless.
+  var swReg = null;
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('./sw.js').then(function (reg) {
+        swReg = reg;
+
+        // Already waiting at registration time
+        if (reg.waiting && navigator.serviceWorker.controller) {
+          showUpdateToast(reg);
+        }
+
+        // A new SW found — wait for it to install
+        reg.addEventListener('updatefound', function () {
+          var nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', function () {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+              showUpdateToast(reg);
+            }
+          });
+        });
+      }).catch(function (err) {
+        // Non-fatal: page still works without SW.
+        console.warn('CATAPULT: SW registration failed', err);
+      });
+
+      // Reload exactly once when the new SW takes control
+      var refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (refreshing) return;
+        refreshing = true;
+        location.reload();
+      });
+    });
+  }
+
+  function showUpdateToast(reg) {
+    if (document.querySelector('.pwa-toast')) return;
+    var toast = document.createElement('div');
+    toast.className = 'pwa-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('tabindex', '0');
+    toast.innerHTML = '<span class="pwa-toast-label">Update</span>' +
+                      '<span>A new build is ready &mdash; tap to refresh.</span>' +
+                      '<button class="pwa-toast-close" type="button" aria-label="Dismiss update">&times;</button>';
+
+    var dismiss = function (e) {
+      if (e) { e.stopPropagation(); }
+      toast.remove();
+    };
+    toast.querySelector('.pwa-toast-close').addEventListener('click', dismiss);
+
+    var apply = function () {
+      if (reg.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      }
+    };
+    toast.addEventListener('click', apply);
+    toast.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); apply(); }
+    });
+    document.body.appendChild(toast);
+  }
+
+  // ---- beforeinstallprompt (Chromium / Edge / Android) ------------------
+  var deferredInstall = null;
+  var installShown = false;
+  var hasInteracted = false;
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferredInstall = e;
+    maybeRenderInstall();
+  });
+
+  window.addEventListener('appinstalled', function () {
+    deferredInstall = null;
+    var btn = document.querySelector('.pwa-install');
+    if (btn) btn.remove();
+  });
+
+  // Interaction heuristic: any pointer/keyboard hit after first paint
+  ['pointerdown', 'keydown', 'touchstart'].forEach(function (ev) {
+    window.addEventListener(ev, function () {
+      hasInteracted = true;
+      maybeRenderInstall();
+    }, { once: true, passive: true });
+  });
+
+  function maybeRenderInstall() {
+    if (installShown || !deferredInstall || !hasInteracted) return;
+    var stamp = document.querySelector('.build-stamp');
+    if (!stamp) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pwa-install';
+    btn.textContent = 'Install';
+    btn.setAttribute('aria-label', 'Install CATAPULT as an app');
+    btn.addEventListener('click', function () {
+      if (!deferredInstall) return;
+      deferredInstall.prompt();
+      deferredInstall.userChoice.then(function () {
+        deferredInstall = null;
+        btn.remove();
+      });
+    });
+    stamp.appendChild(btn);
+    installShown = true;
+  }
+
+  // ---- iOS Safari "Add to Home Screen" hint -----------------------------
+  // iOS does not fire beforeinstallprompt; we surface a one-time hint.
+  try {
+    var ua = navigator.userAgent || '';
+    var isIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+    var isStandalone = ('standalone' in navigator) && navigator.standalone;
+    var dismissed = false;
+    try { dismissed = localStorage.getItem('catapult.iosHintDismissed') === '1'; } catch (_) {}
+
+    if (isIOS && !isStandalone && !dismissed) {
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (document.querySelector('.pwa-ios-hint')) return;
+          var hint = document.createElement('div');
+          hint.className = 'pwa-ios-hint';
+          hint.setAttribute('role', 'note');
+          hint.innerHTML = '<span>Tap <strong>Share</strong> &rarr; <strong>Add to Home Screen</strong> to install.</span>' +
+                           '<button class="pwa-ios-close" type="button" aria-label="Dismiss install hint">&times;</button>';
+          hint.querySelector('.pwa-ios-close').addEventListener('click', function () {
+            hint.remove();
+            try { localStorage.setItem('catapult.iosHintDismissed', '1'); } catch (_) {}
+          });
+          document.body.appendChild(hint);
+        }, 4000);
+      });
+    }
+  } catch (_) { /* never block the page on a UA sniff */ }
+})();
 </script>
 
 </body>

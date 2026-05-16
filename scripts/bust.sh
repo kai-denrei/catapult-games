@@ -92,6 +92,18 @@ while IFS= read -r f; do
   fi
 done < <(walk_source_files)
 
+# ---------- 4. Bump the service worker's CB_TOKEN constant ----------
+# Keyed to the cache name; bumping it forces a new SW install + activate
+# cycle, which evicts the previous cache and surfaces the update toast.
+if [[ -f "./sw.js" ]]; then
+  if grep -qE "^const CB_TOKEN = '[^']*';" "./sw.js"; then
+    sed "${SED_INPLACE[@]}" -E "s/^(const CB_TOKEN = ')[^']*(';)/\1${TOKEN}\2/" "./sw.js"
+    rm -f "./sw.js.cbbak"
+    [[ -z "$QUIET" ]] && echo "  ✓ sw.js CB_TOKEN bumped"
+    REWRITTEN=$((REWRITTEN + 1))
+  fi
+fi
+
 if [[ -z "$QUIET" ]]; then
   echo ""
   echo "🧛  cache bust complete — token ${TOKEN}"

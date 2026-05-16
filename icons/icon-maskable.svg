@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CATAPULT">
+  <title>CATAPULT</title>
+  <!-- Full-bleed background — survives system masking on any platform -->
+  <rect width="512" height="512" fill="#0d0e10"/>
+  <!--
+    Safe zone: the visible mark is inscribed inside the central 60% of the canvas
+    (102.4px margin per side → bounding box ~307.2px). All non-background pixels
+    sit inside that box so any maskable shape (circle, squircle, rounded rect)
+    crops only the background.
+  -->
+  <!-- Stencil C, scaled to fit inside the central 60% box -->
+  <g fill="none" stroke="#d4a256" stroke-width="28" stroke-linecap="butt">
+    <path d="M 326 196
+             A 78 78 0 1 0 326 318"/>
+  </g>
+  <!-- Catapult tick within safe zone -->
+  <line x1="256" y1="158" x2="294" y2="142" stroke="#e6e1d4" stroke-width="6" stroke-linecap="square"/>
+  <circle cx="256" cy="158" r="6" fill="#e6e1d4"/>
+</svg>

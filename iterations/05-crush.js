@@ -31,7 +31,12 @@ const GROUND_FRICTION = 0.9;    // sticky at rest; less tangential creep
 const RESTITUTION = 0.05;       // collision bounce (low → reads as stone)
 const MAX_DRAG = 110;           // clamp drag magnitude (px)
 const LAUNCH_GAIN = 13.0;       // px/s of velocity per px of drag (2x for power)
+const MAX_LAUNCH_VEL = MAX_DRAG * LAUNCH_GAIN; // 1430 px/s — Power=100 equiv.
 const PRESETTLE_TICKS = 90;     // off-screen settle passes before first frame
+const DEFAULT_ANGLE = 45;       // degrees, 0=horizontal right, 90=straight up
+const DEFAULT_POWER = 70;       // 0–100 scale
+const ANGLE_MIN = 0, ANGLE_MAX = 90;
+const POWER_MIN = 0, POWER_MAX = 100;
 
 const COLORS = {
   bg:        '#15171a',
@@ -436,6 +441,9 @@ export function mount(rootEl) {
   let status = 'idle';         // 'idle' | 'flying' | 'won' | 'lost'
   let rafId = 0;
   let lastTs = 0;
+  // Angle/power state for explicit button controls.
+  let angleDeg = DEFAULT_ANGLE;
+  let powerVal = DEFAULT_POWER;
 
   function targetsLeft() { return blocks.filter((b) => b.isTarget && b.alive).length; }
 
@@ -469,6 +477,33 @@ export function mount(rootEl) {
     resetLevel((seed + 1) | 0);
   });
 
+  // Shared spawn path: drag-release and FIRE button both end up here so the
+  // projectile is created the same way regardless of input source.
+  function launchProjectile(vx, vy) {
+    if (projectile || shotsLeft <= 0 || status === 'won' || status === 'lost') return;
+    projectile = makeBlock(SLING_X, SLING_TOP, 16, 16, {
+      isProjectile: true,
+      color: COLORS.amber,
+    });
+    // Set initial velocity by offsetting prev positions.
+    const sub_dt = 1 / 60 / SUBSTEPS;
+    for (const p of projectile.particles) {
+      p.px = p.x - vx * sub_dt;
+      p.py = p.y - vy * sub_dt;
+    }
+    blocks.push(projectile);
+    shotsLeft -= 1;
+    setStatus('flying');
+  }
+
+  // Convert current angle/power state into world-space velocity.
+  // Angle is measured from +x (rightward) toward up; canvas y is down.
+  function angularVelocity() {
+    const rad = angleDeg * Math.PI / 180;
+    const vel = (powerVal / 100) * MAX_LAUNCH_VEL;
+    return { vx: vel * Math.cos(rad), vy: -vel * Math.sin(rad) };
+  }
+
   // Input — only allow drag when no projectile is in flight and shots remain.
   const cleanupInput = dragVector(canvas, {
     onStart: () => {
@@ -494,23 +529,62 @@ export function mount(rootEl) {
       const k = Math.min(MAX_DRAG, m) / m;
       const vx = -dx * k * LAUNCH_GAIN;
       const vy = -dy * k * LAUNCH_GAIN;
-      // Spawn projectile as a small block at sling top.
-      projectile = makeBlock(SLING_X, SLING_TOP, 16, 16, {
-        isProjectile: true,
-        color: COLORS.amber,
-      });
-      // Set initial velocity by offsetting prev positions.
-      const sub_dt = 1 / 60 / SUBSTEPS;
-      for (const p of projectile.particles) {
-        p.px = p.x - vx * sub_dt;
-        p.py = p.y - vy * sub_dt;
-      }
-      blocks.push(projectile);
-      shotsLeft -= 1;
-      setStatus('flying');
+      launchProjectile(vx, vy);
       drag = { dx: 0, dy: 0 };
     },
   });
+
+  // ---------- angle / power / fire DOM controls ----------
+  const ctrlPanel = document.createElement('div');
+  ctrlPanel.className = 'iter-controls';
+  ctrlPanel.innerHTML = `
+    <div class="ctrl-row">
+      <label class="ctrl-label">ANGLE</label>
+      <button type="button" class="ctrl-step" data-target="angle" data-step="-5">&minus;5</button>
+      <button type="button" class="ctrl-step" data-target="angle" data-step="-1">&minus;1</button>
+      <span class="ctrl-value" data-angle-value>${angleDeg}</span>
+      <button type="button" class="ctrl-step" data-target="angle" data-step="1">+1</button>
+      <button type="button" class="ctrl-step" data-target="angle" data-step="5">+5</button>
+    </div>
+    <div class="ctrl-row">
+      <label class="ctrl-label">POWER</label>
+      <button type="button" class="ctrl-step" data-target="power" data-step="-10">&minus;10</button>
+      <button type="button" class="ctrl-step" data-target="power" data-step="-5">&minus;5</button>
+      <span class="ctrl-value" data-power-value>${powerVal}</span>
+      <button type="button" class="ctrl-step" data-target="power" data-step="5">+5</button>
+      <button type="button" class="ctrl-step" data-target="power" data-step="10">+10</button>
+    </div>
+    <button type="button" class="ctrl-fire">FIRE</button>
+  `;
+  rootEl.appendChild(ctrlPanel);
+  const angleValueEl = ctrlPanel.querySelector('[data-angle-value]');
+  const powerValueEl = ctrlPanel.querySelector('[data-power-value]');
+  const fireBtn = ctrlPanel.querySelector('.ctrl-fire');
+
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function updateCtrlDisplay() {
+    angleValueEl.textContent = String(angleDeg);
+    powerValueEl.textContent = String(powerVal);
+  }
+
+  function onStepClick(e) {
+    const btn = e.currentTarget;
+    const step = parseInt(btn.getAttribute('data-step'), 10) || 0;
+    const target = btn.getAttribute('data-target');
+    if (target === 'angle') angleDeg = clamp(angleDeg + step, ANGLE_MIN, ANGLE_MAX);
+    else if (target === 'power') powerVal = clamp(powerVal + step, POWER_MIN, POWER_MAX);
+    updateCtrlDisplay();
+  }
+  const stepBtns = ctrlPanel.querySelectorAll('.ctrl-step');
+  stepBtns.forEach((b) => b.addEventListener('click', onStepClick));
+
+  function onFireClick(e) {
+    e.preventDefault();
+    if (aiming) return; // drag-in-progress wins
+    const { vx, vy } = angularVelocity();
+    launchProjectile(vx, vy);
+  }
+  fireBtn.addEventListener('click', onFireClick);
 
   // ---------- main loop ----------
   function physicsStep(dt) {
@@ -618,6 +692,19 @@ export function mount(rootEl) {
       ctx.beginPath();
       ctx.arc(SLING_X, SLING_TOP, PROJECTILE_RADIUS, 0, Math.PI * 2);
       ctx.fill();
+
+      // Faint preview arc for current angle/power — shows where FIRE will send it.
+      const { vx, vy } = angularVelocity();
+      if (vx !== 0 || vy !== 0) {
+        const pts = previewArc(vx, vy);
+        for (let i = 0; i < pts.length; i++) {
+          const t = i / pts.length;
+          ctx.fillStyle = `rgba(212,162,86,${0.45 * (1 - t)})`;
+          ctx.beginPath();
+          ctx.arc(pts[i].x, pts[i].y, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
 
     // Blocks.
@@ -686,6 +773,8 @@ export function mount(rootEl) {
   const cleanup = function cleanup() {
     cancelAnimationFrame(rafId);
     cleanupInput();
+    stepBtns.forEach((b) => b.removeEventListener('click', onStepClick));
+    fireBtn.removeEventListener('click', onFireClick);
     rootEl.innerHTML = '';
     if (rootEl.__crushCleanup === cleanup) rootEl.__crushCleanup = null;
   };

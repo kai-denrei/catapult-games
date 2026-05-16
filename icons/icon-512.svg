@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CATAPULT">
+  <title>CATAPULT</title>
+  <rect width="512" height="512" fill="#0d0e10"/>
+  <!-- Hairline frame, museum-wall feel -->
+  <rect x="38" y="38" width="436" height="436" fill="none" stroke="#2a2c30" stroke-width="2"/>
+  <!-- Stencil C: amber stroke, opens to the right -->
+  <g fill="none" stroke="#d4a256" stroke-width="38" stroke-linecap="butt">
+    <path d="M 368 160
+             A 122 122 0 1 0 368 352"/>
+  </g>
+  <!-- Catapult tick: a single short arm above the C (the throwing motion) -->
+  <line x1="256" y1="102" x2="314" y2="76" stroke="#e6e1d4" stroke-width="8" stroke-linecap="square"/>
+  <!-- Anchor dot: the pivot -->
+  <circle cx="256" cy="102" r="9" fill="#e6e1d4"/>
+</svg>

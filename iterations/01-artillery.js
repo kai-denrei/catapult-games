@@ -70,10 +70,12 @@ export function mount(rootEl) {
   const screen = el('pre', 'ascii-canvas');
   screen.setAttribute('aria-label', 'Artillery field, ASCII rendered');
 
-  const controls = el('div', 'widget-controls');
+  const controls = el('div', 'iter-controls');
 
-  const angleLabel = el('label', null, 'ANGLE ');
-  const angleInput = el('input');
+  // ANGLE row: -5 -1 [input] +1 +5
+  const angleRow = el('div', 'ctrl-row');
+  const angleLabel = el('label', 'ctrl-label', 'ANGLE');
+  const angleInput = el('input', 'ctrl-value-input');
   angleInput.type = 'number';
   angleInput.min = '0';
   angleInput.max = '90';
@@ -81,10 +83,16 @@ export function mount(rootEl) {
   angleInput.value = '45';
   angleInput.id = uniqueId('artillery-angle');
   angleLabel.htmlFor = angleInput.id;
-  angleLabel.appendChild(angleInput);
+  const angleMinus5 = stepBtn('−5', -5);
+  const angleMinus1 = stepBtn('−1', -1);
+  const anglePlus1  = stepBtn('+1', 1);
+  const anglePlus5  = stepBtn('+5', 5);
+  angleRow.append(angleLabel, angleMinus5, angleMinus1, angleInput, anglePlus1, anglePlus5);
 
-  const powerLabel = el('label', null, 'POWER ');
-  const powerInput = el('input');
+  // POWER row: -5 -1 [input] +1 +5
+  const powerRow = el('div', 'ctrl-row');
+  const powerLabel = el('label', 'ctrl-label', 'POWER');
+  const powerInput = el('input', 'ctrl-value-input');
   powerInput.type = 'number';
   powerInput.min = '0';
   powerInput.max = '100';
@@ -92,9 +100,13 @@ export function mount(rootEl) {
   powerInput.value = '60';
   powerInput.id = uniqueId('artillery-power');
   powerLabel.htmlFor = powerInput.id;
-  powerLabel.appendChild(powerInput);
+  const powerMinus5 = stepBtn('−5', -5);
+  const powerMinus1 = stepBtn('−1', -1);
+  const powerPlus1  = stepBtn('+1', 1);
+  const powerPlus5  = stepBtn('+5', 5);
+  powerRow.append(powerLabel, powerMinus5, powerMinus1, powerInput, powerPlus1, powerPlus5);
 
-  const fireBtn = el('button', null, 'FIRE');
+  const fireBtn = el('button', 'ctrl-fire', 'FIRE');
   fireBtn.type = 'button';
 
   const rerollBtn = el('button', null, 'Re-roll');
@@ -102,8 +114,34 @@ export function mount(rootEl) {
 
   const result = el('p', 'widget-status');
 
-  controls.append(angleLabel, powerLabel, fireBtn, rerollBtn);
+  controls.append(angleRow, powerRow, fireBtn, rerollBtn);
   rootEl.append(log, status, screen, controls, result);
+
+  // Collect step buttons for cleanup wiring.
+  const angleSteps = [angleMinus5, angleMinus1, anglePlus1, anglePlus5];
+  const powerSteps = [powerMinus5, powerMinus1, powerPlus1, powerPlus5];
+
+  function stepBtn(label, delta) {
+    const b = el('button', 'ctrl-step', label);
+    b.type = 'button';
+    b.dataset.step = (delta > 0 ? '+' : '') + String(delta);
+    return b;
+  }
+
+  // Nudge an input's value by delta, clamping to its min/max, and fire 'input'
+  // so any existing listeners (none today, but reserved) react identically to
+  // typing.
+  function nudge(input, delta) {
+    const min = Number(input.min);
+    const max = Number(input.max);
+    const cur = Number(input.value);
+    const base = Number.isFinite(cur) ? cur : (Number.isFinite(min) ? min : 0);
+    const next = clamp(base + delta, min, max);
+    if (next !== cur) {
+      input.value = String(next);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
 
   // --- game state ---
   let seed = 1976;
@@ -369,6 +407,19 @@ export function mount(rootEl) {
     newRound();
   }
 
+  // Per-button click handler factory — keep references so cleanup can detach.
+  const stepHandlers = [];
+  function wireSteps(input, buttons) {
+    for (const btn of buttons) {
+      const delta = Number(btn.dataset.step);
+      const handler = () => nudge(input, delta);
+      btn.addEventListener('click', handler);
+      stepHandlers.push({ btn, handler });
+    }
+  }
+  wireSteps(angleInput, angleSteps);
+  wireSteps(powerInput, powerSteps);
+
   fireBtn.addEventListener('click', onFire);
   rerollBtn.addEventListener('click', onReroll);
   angleInput.addEventListener('keydown', onKey);
@@ -382,6 +433,9 @@ export function mount(rootEl) {
     rerollBtn.removeEventListener('click', onReroll);
     angleInput.removeEventListener('keydown', onKey);
     powerInput.removeEventListener('keydown', onKey);
+    for (const { btn, handler } of stepHandlers) {
+      btn.removeEventListener('click', handler);
+    }
     rootEl.innerHTML = '';
   };
 }

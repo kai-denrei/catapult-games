@@ -1,43 +1,190 @@
 /* =============================================================
-   CATAPULT — iterations.css
+   CATAPULT — iterations.css  (MOBILE-FIRST)
    Per-iteration scoping. Most chrome lives in base.css; this file
-   only carries the canvas-frame treatment and the small era-
-   specific rendering hints (mono pre for 1976, pixelated for 1982).
+   carries the canvas-frame treatment, the era-specific rendering
+   hints, and the shared mobile control classes (.iter-controls,
+   .ctrl-step, .ctrl-fire, etc.) used by individual iterations.
 
    Spec forbids fake era chrome (no CRT scanlines on 1976,
    no fake Amiga dithering on 1986). Keep this file lean.
    ============================================================= */
 
-/* ---- Shared canvas frame ---------------------------------- */
-/* Goal: "framed plate in a book", not "UI panel".
-   Thin amber inset hairline + soft elev mat around the plate. */
+/* =============================================================
+   SHARED CANVAS FRAME  — "framed plate in a book"
+   Thin amber inset hairline + soft elev mat around the plate.
+   Mobile reduces the outer mat so the frame isn't precious about
+   real estate on a 360px screen.
+   ============================================================= */
 .iter .widget canvas,
 .iter .widget pre.ascii-canvas {
   background: var(--bg-elev);
   border: 1px solid var(--amber);
   box-shadow:
     inset 0 0 0 1px rgba(212, 162, 86, 0.18),
-    0 0 0 8px var(--bg-elev),
-    0 0 0 9px var(--rule);
+    0 0 0 4px var(--bg-elev),
+    0 0 0 5px var(--rule);
   border-radius: 1px;
+  width: 100%;
   max-width: 100%;
   height: auto;
 }
 
-/* ---- 01 Artillery (1976) ---------------------------------- */
-/* ASCII rendered to a <pre> styled as a "canvas plate". */
+@media (min-width: 720px) {
+  /* Wider mat once we have room. */
+  .iter .widget canvas,
+  .iter .widget pre.ascii-canvas {
+    box-shadow:
+      inset 0 0 0 1px rgba(212, 162, 86, 0.18),
+      0 0 0 8px var(--bg-elev),
+      0 0 0 9px var(--rule);
+  }
+}
+
+/* =============================================================
+   SHARED MOBILE CONTROL CLASSES
+   The per-iteration JS modules use these. They MUST feel native
+   to the museum-wall aesthetic — no arcade chrome, no rounded
+   chunky game UI. Hairlines, monospace, amber accent only.
+   ============================================================= */
+
+.iter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+
+.ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+}
+
+.ctrl-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  min-width: 3.5rem;
+  text-align: right;
+}
+
+.ctrl-step {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 0.5rem;
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  line-height: 1;
+}
+.ctrl-step:hover  { border-color: var(--amber); color: var(--amber); }
+.ctrl-step:active { background: var(--amber); color: var(--bg); }
+.ctrl-step:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.ctrl-value {
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  color: var(--amber);
+  min-width: 2.5rem;
+  text-align: center;
+  padding: 0 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctrl-fire {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 1.5rem;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: var(--amber);
+  color: var(--bg);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  font-weight: 600;
+}
+.ctrl-fire:hover    { background: var(--fg); }
+.ctrl-fire:active   { transform: scale(0.97); }
+.ctrl-fire:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* Generic "ammo selector" buttons — used by 03 and any future
+   iteration with a discrete kind-picker. */
+.ammo-btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.4rem 0.85rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  text-transform: uppercase;
+}
+.ammo-btn:hover { border-color: var(--amber); color: var(--amber); }
+.ammo-btn[aria-pressed="true"],
+.ammo-btn.is-active {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: rgba(212, 162, 86, 0.08);
+}
+.ammo-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+@media (min-width: 720px) {
+  .iter-controls { gap: 0.75rem 1rem; padding: 0.85rem 1rem; }
+  .ctrl-label    { font-size: 0.75rem; min-width: 4rem; }
+}
+
+/* =============================================================
+   01 ARTILLERY (1976)
+   ASCII rendered to a <pre> styled as a "canvas plate".
+   ============================================================= */
 .iter-01 .widget pre.ascii-canvas,
 .iter-01 .widget .ascii-canvas {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 11px;             /* small phones first */
   line-height: 1.15;
   color: var(--fg);
   white-space: pre;
-  padding: 1rem 1.25rem;
+  padding: 0.75rem 0.85rem;
   margin: 0;
-  overflow: hidden;
-  /* keep within the prose breakout width */
+  overflow-x: auto;            /* fixed-width ASCII may need to scroll on narrow phones */
+  -webkit-overflow-scrolling: touch;
   min-width: 0;
+}
+
+@media (min-width: 720px) {
+  .iter-01 .widget pre.ascii-canvas,
+  .iter-01 .widget .ascii-canvas {
+    font-size: 13px;
+    line-height: 1.15;
+    padding: 1rem 1.25rem;
+    overflow: hidden;
+  }
 }
 
 /* Input row for angle / power / fire — purely typographic */
@@ -46,7 +193,7 @@
   font-size: 0.85rem;
   color: var(--fg-muted);
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.4rem;
 }
 .iter-01 .widget-controls input[type="number"],
@@ -54,20 +201,56 @@
   width: 5rem;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  /* base.css enforces 16px font + 44px min-height for tap-friendliness */
 }
 
-/* ---- 02 Smithereens! (1982) ------------------------------- */
-/* Chunky 8x8 blocks: crisp pixels, no smoothing. */
+/* =============================================================
+   02 SMITHEREENS! (1982)
+   Chunky 8x8 blocks: crisp pixels, no smoothing.
+   ============================================================= */
 .iter-02 .widget canvas {
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
 }
 
-/* ---- 03 Defender of the Crown (1986) ---------------------- */
-/* No pixelation: 1986 Amiga vibe is smoother than 8-bit.
-   Pullback affordance — show a power meter inline if the dev
-   agent adds one as a <progress> or .meter element. */
+/* =============================================================
+   03 DEFENDER OF THE CROWN (1986)
+   Two panels: SIDE PROFILE + SAXON CASTLE.
+   - Mobile: stacked vertically (panels are flex children of
+     .iter-stage, which already uses flex-wrap; we force a single
+     column at narrow widths).
+   - 720px+: side-by-side via the existing flex behavior.
+   ============================================================= */
+
+/* Mobile: force the two panels to stack. The JS sets
+   flex-direction: row + flex-wrap: wrap inline; on mobile we
+   override with flex-direction: column so panels don't share
+   a cramped row. */
+.iter-03 .iter-stage {
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
+
+.iter-03 .iter-panel {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  width: 100%;
+}
+
+@media (min-width: 720px) {
+  /* Restore the original side-by-side layout. */
+  .iter-03 .iter-stage {
+    flex-direction: row !important;
+    align-items: flex-start !important;
+  }
+  .iter-03 .iter-panel {
+    /* flex: 1 1 320px from JS keeps each panel ~half-width */
+    max-width: 480px !important;
+  }
+}
+
+/* Per-panel caption + ammo controls already present in CSS */
 .iter-03 .widget .ammo-toggle {
   font-family: var(--mono);
   font-size: 0.85rem;
@@ -83,9 +266,11 @@
   color: var(--blood);
 }
 
-/* ---- 04 Gorillas / Scorched Earth (1991) ------------------ */
-/* Side-view with a wind arrow header. Keep numerals tabular
-   so the angle/power readout doesn't jitter. */
+/* =============================================================
+   04 GORILLAS / SCORCHED EARTH (1991)
+   Side-view with a wind arrow header. Tabular numerals so the
+   angle/power readout doesn't jitter.
+   ============================================================= */
 .iter-04 .widget-controls,
 .iter-04 .widget-status {
   font-variant-numeric: tabular-nums;
@@ -96,9 +281,10 @@
   letter-spacing: 0.04em;
 }
 
-/* ---- 05 Crush the Castle / Angry Birds (2009) ------------- */
-/* Drag-slingshot. The trajectory-preview dots should sit on
-   top of the canvas; nothing needed here beyond the shared
-   frame, but reserve the hook for cursor affordance. */
-.iter-05 .widget canvas { cursor: grab; }
-.iter-05 .widget canvas:active { cursor: grabbing; }
+/* =============================================================
+   05 CRUSH THE CASTLE / ANGRY BIRDS (2009)
+   Drag-slingshot. Cursor hint only — touch users get the same
+   gesture for free.
+   ============================================================= */
+.iter-05 .widget canvas         { cursor: grab; touch-action: none; }
+.iter-05 .widget canvas:active  { cursor: grabbing; }

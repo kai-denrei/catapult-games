@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OFFLINE — CATAPULT</title>
+  <meta name="description" content="Offline fallback for the CATAPULT lineage site.">
+  <meta name="theme-color" content="#0d0e10">
+  <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg?v=b2287a85">
+  <style>
+    :root {
+      --bg:        #0d0e10;
+      --bg-elev:   #15171a;
+      --fg:        #e6e1d4;
+      --fg-muted:  #8a8275;
+      --rule:      #2a2c30;
+      --amber:     #d4a256;
+      --serif: 'EB Garamond', 'Iowan Old Style', Charter, Georgia, 'Times New Roman', serif;
+      --mono:  'JetBrains Mono', ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--fg); }
+    body {
+      font-family: var(--serif);
+      font-size: 17px;
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    .frame {
+      max-width: 32rem;
+      width: 100%;
+      border: 1px solid var(--rule);
+      padding: 3rem 2.5rem;
+      text-align: left;
+    }
+    .mono { font-family: var(--mono); font-size: 0.85em; letter-spacing: 0.04em; }
+    .muted { color: var(--fg-muted); }
+    .stamp {
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: 0.78em;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      margin: 0 0 1.5rem 0;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-weight: 400;
+      font-size: 2rem;
+      line-height: 1.15;
+      margin: 0 0 1.5rem 0;
+      letter-spacing: 0.01em;
+    }
+    p { margin: 0 0 1rem 0; }
+    .rule {
+      border: 0;
+      border-top: 1px solid var(--rule);
+      margin: 2rem 0 1.5rem 0;
+    }
+    a {
+      color: var(--amber);
+      text-decoration: none;
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 1px;
+    }
+    a:hover, a:focus { border-bottom-color: var(--amber); }
+    .retry {
+      display: inline-block;
+      margin-top: 0.5rem;
+      font-family: var(--mono);
+      font-size: 0.85em;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      border: 1px solid var(--amber);
+      color: var(--amber);
+      padding: 0.6rem 1.1rem;
+    }
+    .retry:hover, .retry:focus { background: var(--amber); color: var(--bg); }
+  </style>
+</head>
+<body>
+  <main class="frame" role="main">
+    <p class="stamp">Offline</p>
+    <h1>The wall is unreachable.</h1>
+    <p>
+      CATAPULT needs a network connection on first visit. If you have loaded the
+      site before, a cached copy may be available — try again in a moment.
+    </p>
+    <p class="muted">
+      The five iterations are static; once installed, they will play without a connection.
+    </p>
+    <hr class="rule">
+    <p><a class="retry" href="./" aria-label="Return to CATAPULT">Return to CATAPULT</a></p>
+    <p class="mono muted" style="margin-top:1.5rem;">1972 &mdash; 2009</p>
+  </main>
+</body>
+</html>

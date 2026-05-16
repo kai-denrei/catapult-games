@@ -216,7 +216,7 @@ function ammoColor(kind, T) {
 // SIDE GAME — the original 1986 siege
 // =========================================================================
 function createSideGame(refs, T) {
-  const { canvas, ctx, controls } = refs;
+  const { canvas, ctx, controls, panel } = refs;
 
   // ---- Controls ---------------------------------------------------------
   const btnBoulder = mkButton('Boulder', T);
@@ -226,6 +226,81 @@ function createSideGame(refs, T) {
   btnReset.style.marginLeft  = '8px';
   btnReset.style.borderColor = T.teal;
   controls.append(btnBoulder, btnFire, btnDisease, btnReset);
+
+  // ---- Mobile power + fire panel (below the ammo selector) -------------
+  // Pullback gesture still works on its own; this is an additive control
+  // surface so mobile players can dial in a repeatable power instead of
+  // estimating pull duration. FIRE launches at the slider value using the
+  // same fire() path that release-of-pullback uses.
+  let sidePowerValue = 50;             // 0..100, displayed in .ctrl-value
+  const mobilePanel = document.createElement('div');
+  mobilePanel.className = 'iter-controls';
+  const powerRow = document.createElement('div');
+  powerRow.className = 'ctrl-row';
+  const powerLabel = document.createElement('label');
+  powerLabel.className = 'ctrl-label';
+  powerLabel.textContent = 'POWER';
+  const sideStepDefs = [
+    { step: -10, label: '−10' },   // unicode minus
+    { step:  -5, label: '−5'  },
+    { step:  +5, label: '+5'  },
+    { step: +10, label: '+10' },
+  ];
+  const sideStepBtns = [];
+  const sideValueEl = document.createElement('span');
+  sideValueEl.className = 'ctrl-value';
+  sideValueEl.setAttribute('data-power-value', '');
+  sideValueEl.textContent = String(sidePowerValue);
+  powerRow.appendChild(powerLabel);
+  // Insert the negative steps before the value display, positive after.
+  sideStepDefs.filter((d) => d.step < 0).forEach((d) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctrl-step';
+    b.dataset.step = String(d.step);
+    b.textContent = d.label;
+    b.setAttribute('aria-label', 'Decrease power by ' + Math.abs(d.step));
+    powerRow.appendChild(b);
+    sideStepBtns.push(b);
+  });
+  powerRow.appendChild(sideValueEl);
+  sideStepDefs.filter((d) => d.step > 0).forEach((d) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctrl-step';
+    b.dataset.step = String(d.step);
+    b.textContent = d.label;
+    b.setAttribute('aria-label', 'Increase power by ' + d.step);
+    powerRow.appendChild(b);
+    sideStepBtns.push(b);
+  });
+  mobilePanel.appendChild(powerRow);
+
+  const sideFireBtn = document.createElement('button');
+  sideFireBtn.type = 'button';
+  sideFireBtn.className = 'ctrl-fire';
+  sideFireBtn.textContent = 'FIRE';
+  sideFireBtn.setAttribute('aria-label', 'Fire at the displayed power');
+  mobilePanel.appendChild(sideFireBtn);
+  // Mount the mobile panel onto the panel (below the existing controls row).
+  panel.appendChild(mobilePanel);
+
+  function setSidePower(v) {
+    sidePowerValue = Math.max(0, Math.min(100, Math.round(v)));
+    sideValueEl.textContent = String(sidePowerValue);
+  }
+  const sideStepHandlers = sideStepBtns.map((b) => {
+    const fn = () => setSidePower(sidePowerValue + Number(b.dataset.step));
+    b.addEventListener('click', fn);
+    return [b, fn];
+  });
+  const onSideFire = () => {
+    if (state.gameOver || state.projectile || state.arm.pulling) return;
+    const power = sidePowerValue / 100;
+    const v = V_MIN + (V_MAX - V_MIN) * power;
+    fire(v);
+  };
+  sideFireBtn.addEventListener('click', onSideFire);
 
   // ---- State ------------------------------------------------------------
   let state;
@@ -565,6 +640,9 @@ function createSideGame(refs, T) {
       btnFire.removeEventListener('click', onFire);
       btnDisease.removeEventListener('click', onDisease);
       btnReset.removeEventListener('click', onReset);
+      // Mobile control panel listeners.
+      for (const [b, fn] of sideStepHandlers) b.removeEventListener('click', fn);
+      sideFireBtn.removeEventListener('click', onSideFire);
     },
   };
 }
@@ -588,7 +666,7 @@ function createSideGame(refs, T) {
 //   overshoots. The column is unaffected on misses.
 //   6 shots total. If the column hasn't been broken through after 6, DEFEAT.
 function createFrontGame(refs, T) {
-  const { canvas, ctx, controls } = refs;
+  const { canvas, ctx, controls, panel } = refs;
 
   // ---- Layout constants (front view) -----------------------------------
   const HORIZON      = 230;
@@ -638,6 +716,83 @@ function createFrontGame(refs, T) {
   const btnReset = mkButton('New siege', T);
   btnReset.style.borderColor = T.teal;
   controls.append(btnReset);
+
+  // ---- Mobile power + fire panel ---------------------------------------
+  // Slider value maps 1:1 to launchR (boulder pullback radius). Sweet-spot
+  // is FRONT_SWEET_R (22), tolerance ±FRONT_SWEET_TOL (7). Range matches
+  // BOULDER_R_REST..BOULDER_R_FULL (6..30) so the slider span covers every
+  // shot the pullback gesture can produce. The trajectory preview reads
+  // this value when idle, so users see the predicted arc move live as
+  // they tap +/-.
+  let frontPowerValue = FRONT_SWEET_R;
+  const FRONT_POWER_MIN = BOULDER_R_REST;
+  const FRONT_POWER_MAX = BOULDER_R_FULL;
+
+  const mobilePanel = document.createElement('div');
+  mobilePanel.className = 'iter-controls';
+  const powerRow = document.createElement('div');
+  powerRow.className = 'ctrl-row';
+  const powerLabel = document.createElement('label');
+  powerLabel.className = 'ctrl-label';
+  powerLabel.textContent = 'POWER';
+  const frontStepDefs = [
+    { step: -5, label: '−5' },
+    { step: -1, label: '−1' },
+    { step: +1, label: '+1' },
+    { step: +5, label: '+5' },
+  ];
+  const frontStepBtns = [];
+  const frontValueEl = document.createElement('span');
+  frontValueEl.className = 'ctrl-value';
+  frontValueEl.setAttribute('data-power-value', '');
+  frontValueEl.textContent = String(frontPowerValue);
+  powerRow.appendChild(powerLabel);
+  frontStepDefs.filter((d) => d.step < 0).forEach((d) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctrl-step';
+    b.dataset.step = String(d.step);
+    b.textContent = d.label;
+    b.setAttribute('aria-label', 'Decrease power by ' + Math.abs(d.step));
+    powerRow.appendChild(b);
+    frontStepBtns.push(b);
+  });
+  powerRow.appendChild(frontValueEl);
+  frontStepDefs.filter((d) => d.step > 0).forEach((d) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctrl-step';
+    b.dataset.step = String(d.step);
+    b.textContent = d.label;
+    b.setAttribute('aria-label', 'Increase power by ' + d.step);
+    powerRow.appendChild(b);
+    frontStepBtns.push(b);
+  });
+  mobilePanel.appendChild(powerRow);
+
+  const frontFireBtn = document.createElement('button');
+  frontFireBtn.type = 'button';
+  frontFireBtn.className = 'ctrl-fire';
+  frontFireBtn.textContent = 'FIRE';
+  frontFireBtn.setAttribute('aria-label', 'Fire at the displayed power');
+  mobilePanel.appendChild(frontFireBtn);
+  panel.appendChild(mobilePanel);
+
+  function setFrontPower(v) {
+    frontPowerValue = Math.max(FRONT_POWER_MIN, Math.min(FRONT_POWER_MAX, Math.round(v)));
+    frontValueEl.textContent = String(frontPowerValue);
+  }
+  const frontStepHandlers = frontStepBtns.map((b) => {
+    const fn = () => setFrontPower(frontPowerValue + Number(b.dataset.step));
+    b.addEventListener('click', fn);
+    return [b, fn];
+  });
+  const onFrontFire = () => {
+    if (state.gameOver || state.projectile || state.arm.pulling) return;
+    state.launchR = frontPowerValue;
+    fire();
+  };
+  frontFireBtn.addEventListener('click', onFrontFire);
 
   // ---- State ------------------------------------------------------------
   let state;
@@ -1268,13 +1423,21 @@ function createFrontGame(refs, T) {
       armTipX = tip.tipX; armTipY = tip.tipY;
     }
 
-    // --- Trajectory preview (during pullback only) ----------------------
+    // --- Trajectory preview (during pullback OR idle with slider) -------
     // A dotted amber arc showing where the boulder would land at the
-    // CURRENT pullback level. Recomputed every frame as pullT changes.
-    // Integrated with the SAME semi-implicit Euler used in flight, so the
-    // dots track the actual boulder path tightly.
-    if (state.arm.pulling && pullT > 0.02 && !state.projectile && !state.gameOver) {
-      const previewR = BOULDER_R_REST + (BOULDER_R_FULL - BOULDER_R_REST) * pullT;
+    // current "would-be" pullback radius. While the player is actively
+    // pulling, that radius derives from pull duration. While idle, it
+    // derives from the mobile POWER slider, so tapping +/- moves the
+    // predicted arc live before the user commits to FIRE. Integrated with
+    // the SAME semi-implicit Euler used in flight, so the dots track the
+    // actual boulder path tightly.
+    const showPullPreview = state.arm.pulling && pullT > 0.02 &&
+                            !state.projectile && !state.gameOver;
+    const showIdlePreview = !state.arm.pulling && !state.projectile && !state.gameOver;
+    if (showPullPreview || showIdlePreview) {
+      const previewR = showPullPreview
+        ? (BOULDER_R_REST + (BOULDER_R_FULL - BOULDER_R_REST) * pullT)
+        : frontPowerValue;
       const lp = launchPoint();
       const { vx0, vy0 } = launchVelocity(previewR);
       // Sub-step the integrator so the dots match what step() will draw.
@@ -1419,6 +1582,8 @@ function createFrontGame(refs, T) {
     cleanup: () => {
       cleanupTension();
       btnReset.removeEventListener('click', onReset);
+      for (const [b, fn] of frontStepHandlers) b.removeEventListener('click', fn);
+      frontFireBtn.removeEventListener('click', onFrontFire);
     },
   };
 }

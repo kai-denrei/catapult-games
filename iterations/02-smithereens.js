@@ -150,6 +150,33 @@ export function mount(rootEl) {
   hint.textContent = 'Hold Space (or click) to lock the arm  ·  release to fire';
   controls.appendChild(hint);
 
+  // ---- Mobile-friendly control panel (below status) ---------------------
+  // A big HOLD-TO-AIM zone gives touch users a finger-sized control surface
+  // separate from the canvas. Pointer-down on the button = same as Space-down
+  // (lock arm at current swing angle). Pointer-up = same as Space-up (fire).
+  // Also exposes a RESTART button so the panel works without scrolling back
+  // to the top widget-controls row on a phone.
+  const iterControls = document.createElement('div');
+  iterControls.className = 'iter-controls';
+  wrap.appendChild(iterControls);
+
+  const holdBtn = document.createElement('button');
+  holdBtn.type = 'button';
+  holdBtn.className = 'ctrl-fire ctrl-hold';
+  holdBtn.id = 'iter02-hold';
+  holdBtn.textContent = 'HOLD TO AIM · RELEASE TO FIRE';
+  holdBtn.setAttribute('aria-label',
+    'Hold to lock the catapult arm at the current swing angle, release to fire');
+  iterControls.appendChild(holdBtn);
+
+  const iterRestartBtn = document.createElement('button');
+  iterRestartBtn.type = 'button';
+  iterRestartBtn.className = 'ctrl-step';
+  iterRestartBtn.id = 'iter02-restart';
+  iterRestartBtn.textContent = 'RESTART';
+  iterRestartBtn.setAttribute('aria-label', 'Restart the duel');
+  iterControls.appendChild(iterRestartBtn);
+
   const status = document.createElement('p');
   status.className = 'widget-status';
   status.setAttribute('role', 'status');
@@ -633,6 +660,7 @@ export function mount(rootEl) {
 
   let spaceDown = false;
   let pointerDown = false;
+  let holdBtnDown = false;     // .ctrl-hold mobile button held
 
   const onPointerDown = (ev) => {
     canvas.focus?.();
@@ -645,7 +673,7 @@ export function mount(rootEl) {
   const onPointerUp = (ev) => {
     if (!pointerDown) return;
     pointerDown = false;
-    if (!spaceDown) releasePlayerArm();
+    if (!spaceDown && !holdBtnDown) releasePlayerArm();
     ev.preventDefault?.();
   };
   const onKeyDown = (ev) => {
@@ -660,9 +688,32 @@ export function mount(rootEl) {
     if (ev.code !== 'Space') return;
     if (!spaceDown) return;
     spaceDown = false;
-    if (!pointerDown) releasePlayerArm();
+    if (!pointerDown && !holdBtnDown) releasePlayerArm();
     ev.preventDefault();
   };
+
+  // .ctrl-hold (mobile/touch) — third gesture surface, fully equivalent to
+  // Space-hold. Uses Pointer Events so touch + mouse + pen all work. Idle
+  // until Begin has been pressed; ignored after a winner is decided.
+  const onHoldDown = (ev) => {
+    if (!started || state.winner) return;
+    holdBtnDown = true;
+    holdBtn.setAttribute('aria-pressed', 'true');
+    holdBtn.classList.add('is-active');
+    lockPlayerArm();
+    ev.preventDefault?.();
+  };
+  const onHoldUp = (ev) => {
+    if (!holdBtnDown) return;
+    holdBtnDown = false;
+    holdBtn.setAttribute('aria-pressed', 'false');
+    holdBtn.classList.remove('is-active');
+    if (!pointerDown && !spaceDown) releasePlayerArm();
+    ev.preventDefault?.();
+  };
+  // Restart button — same as the top-row Restart, but always visible in the
+  // mobile panel (no scrolling required on a phone).
+  const onIterRestart = () => { startGame(); };
 
   function lockPlayerArm() {
     const p = state.player;
@@ -684,6 +735,12 @@ export function mount(rootEl) {
   canvas.addEventListener('pointerleave', onPointerUp);
   canvas.addEventListener('keydown', onKeyDown);
   canvas.addEventListener('keyup', onKeyUp);
+
+  holdBtn.addEventListener('pointerdown', onHoldDown);
+  holdBtn.addEventListener('pointerup', onHoldUp);
+  holdBtn.addEventListener('pointercancel', onHoldUp);
+  holdBtn.addEventListener('pointerleave', onHoldUp);
+  iterRestartBtn.addEventListener('click', onIterRestart);
 
   // ---- Begin / Restart --------------------------------------------------
   function startGame() {
@@ -718,6 +775,11 @@ export function mount(rootEl) {
     canvas.removeEventListener('pointerleave', onPointerUp);
     canvas.removeEventListener('keydown', onKeyDown);
     canvas.removeEventListener('keyup', onKeyUp);
+    holdBtn.removeEventListener('pointerdown', onHoldDown);
+    holdBtn.removeEventListener('pointerup', onHoldUp);
+    holdBtn.removeEventListener('pointercancel', onHoldUp);
+    holdBtn.removeEventListener('pointerleave', onHoldUp);
+    iterRestartBtn.removeEventListener('click', onIterRestart);
     if (rootEl.__smithereensCleanup === cleanup) {
       rootEl.__smithereensCleanup = null;
     }

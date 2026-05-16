@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-label="CATAPULT">
+  <title>CATAPULT</title>
+  <rect width="180" height="180" fill="#0d0e10"/>
+  <rect x="13" y="13" width="154" height="154" fill="none" stroke="#2a2c30" stroke-width="1"/>
+  <!-- Stencil C: amber stroke, opens right -->
+  <g fill="none" stroke="#d4a256" stroke-width="13" stroke-linecap="butt">
+    <path d="M 130 56
+             A 43 43 0 1 0 130 124"/>
+  </g>
+  <!-- Catapult tick -->
+  <line x1="90" y1="36" x2="110" y2="27" stroke="#e6e1d4" stroke-width="3" stroke-linecap="square"/>
+  <circle cx="90" cy="36" r="3" fill="#e6e1d4"/>
+</svg>

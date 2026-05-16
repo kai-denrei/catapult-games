@@ -1,12 +1,24 @@
 /* =============================================================
-   CATAPULT — base.css
+   CATAPULT — base.css  (MOBILE-FIRST)
    Museum-wall editorial chrome. Dark palette, transitional serif,
    generous rhythm. System font stack only (no @font-face).
+
+   Strategy:
+     - Defaults target 320–719px (small phones first).
+     - @media (min-width: 720px) layers tablet enhancements.
+     - @media (min-width: 1024px) restores the desktop experience
+       described in CATAPULT.md §Aesthetic / §Layout.
+
+   Class-name compatibility note:
+     index.html uses .page-header / .page-title / .page-dates /
+     .manifesto / .meta / .page-footer. The earlier CSS targeted
+     .site-header / .site-title / etc. We support BOTH so this file
+     is robust to either HTML naming pass.
    ============================================================= */
 
 /* ---- Tokens ------------------------------------------------ */
 :root {
-  /* Palette (CATAPULT.md §Aesthetic) */
+  /* Palette (CATAPULT.md §Aesthetic — DO NOT CHANGE) */
   --bg:        #0d0e10;
   --bg-elev:   #15171a;
   --fg:        #e6e1d4;
@@ -16,26 +28,37 @@
   --teal:      #5fb5b0;
   --blood:     #8a3a32;
 
-  /* Typography stacks (system fallbacks only) */
+  /* Typography stacks (system fallbacks only — no @font-face) */
   --serif: 'EB Garamond', 'Iowan Old Style', Charter, Georgia, 'Times New Roman', serif;
   --mono:  'JetBrains Mono', ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* Rhythm */
   --measure: 36rem;        /* ~720px prose column at 17px base */
-  --section-pad: 6rem;     /* vertical breathing between sections */
+  --section-pad: 2.5rem;   /* mobile default; widened at 720px+ */
   --hairline: 1px;
+
+  /* Touch targets — Apple/WCAG minimum */
+  --tap: 44px;
 }
 
 /* ---- Reset (minimal, hand-rolled) -------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+
+html {
+  -webkit-text-size-adjust: 100%;     /* prevent iOS auto-zoom in landscape */
+}
+
 body, h1, h2, h3, h4, p, ul, ol, figure, aside, blockquote, pre { margin: 0; }
 ul, ol { padding: 0; list-style: none; }
 img, svg, canvas { display: block; max-width: 100%; }
-button, input, textarea { font: inherit; color: inherit; }
+button, input, textarea, select { font: inherit; color: inherit; }
+
+/* Subtle amber tap highlight on touch — replaces ugly blue iOS default */
+* { -webkit-tap-highlight-color: rgba(212, 162, 86, 0.2); }
 
 /* ---- Base ------------------------------------------------- */
 html, body { background: var(--bg); color: var(--fg); }
+
 body {
   font-family: var(--serif);
   font-size: 17px;
@@ -44,58 +67,84 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
   padding: 0;
-  /* leave room for sticky right-gutter nav on wide viewports */
 }
 
 /* ---- Selection -------------------------------------------- */
 ::selection { background: var(--amber); color: var(--bg); }
 
-/* ---- Page container --------------------------------------- */
-.page {
-  max-width: var(--measure);
+/* =============================================================
+   MOBILE DEFAULT  (320–719px)
+   Single column, edge-aware padding, full-width canvases.
+   ============================================================= */
+
+/* Page-wide horizontal padding lives on body so the page header,
+   main, and footer all share the same gutter. */
+body {
+  padding: 1rem;
+  max-width: 100%;
+}
+
+main {
+  display: block;
+  max-width: 100%;
   margin: 0 auto;
-  padding: 4rem 1.5rem 2rem;
+}
+
+/* The earlier markup shipped a .page wrapper; keep it harmless. */
+.page {
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 0;
 }
 
 /* ---- Header ----------------------------------------------- */
+.page-header,
 .site-header {
   text-align: left;
-  padding-bottom: 3rem;
+  padding: 1rem 0 2rem;
   border-bottom: var(--hairline) solid var(--rule);
-  margin-bottom: var(--section-pad);
+  margin-bottom: 2.5rem;
 }
 
+.page-title,
 .site-title {
   font-family: var(--serif);
   font-weight: 600;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  font-size: clamp(2.5rem, 6vw, 4.25rem);
+  font-size: clamp(2.4rem, 9vw, 4rem);
   line-height: 1.05;
   margin-bottom: 0.5rem;
+  /* prevent the long all-caps title overflowing tiny screens */
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
+.page-dates,
 .site-dates {
   font-family: var(--mono);
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   letter-spacing: 0.06em;
   color: var(--amber);
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 
+.manifesto,
 .site-manifesto {
-  max-width: 32rem;
+  max-width: 100%;
   color: var(--fg);
-  font-size: 1.0625rem; /* 17px */
+  font-size: 1rem;
 }
 
+.manifesto p + p,
 .site-manifesto p + p { margin-top: 0.75rem; }
 
 /* ---- Lineage SVG block ------------------------------------ */
 .lineage {
-  margin: var(--section-pad) auto;
-  padding: 1.5rem 0;
+  margin: 2rem auto;
+  padding: 1rem 0;
   border-top: var(--hairline) solid var(--rule);
   border-bottom: var(--hairline) solid var(--rule);
 }
@@ -103,36 +152,48 @@ body {
 .lineage svg,
 .lineage img {
   width: 100%;
+  max-width: 100%;
   height: auto;
   display: block;
+}
+.lineage figcaption {
+  margin-top: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  letter-spacing: 0.04em;
+  text-align: center;
 }
 
 /* ---- Iteration sections ----------------------------------- */
 .iter {
-  padding: var(--section-pad) 0;
+  padding: 2rem 0;
   border-top: var(--hairline) solid var(--rule);
   position: relative;
 }
-.iter:first-of-type { border-top: 0; padding-top: 2rem; }
+.iter:first-of-type { border-top: 0; padding-top: 1.5rem; }
 
 .iter-label {
   font-family: var(--mono);
-  font-size: 0.8125rem;       /* ~13px */
+  font-size: 0.75rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--fg-muted);
   margin-bottom: 0.75rem;
 }
 
+/* The H2 is structured as: <span class="year mono">YEAR</span> — TITLE */
+.iter h2,
 .iter-title {
   font-family: var(--serif);
   font-weight: 600;
-  font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+  font-size: clamp(1.5rem, 5.5vw, 2.25rem);
   letter-spacing: -0.005em;
-  line-height: 1.15;
+  line-height: 1.18;
   margin-bottom: 0.5rem;
 }
 
+.iter h2 .year,
 .iter-title .year {
   color: var(--amber);
   font-weight: 600;
@@ -140,67 +201,64 @@ body {
   margin-right: 0.4em;
 }
 
-/* Metadata strip — under the title */
+/* Metadata strip — under the title.
+   .meta is the live HTML class; .iter-meta is the legacy alias. */
+.iter .meta,
 .iter-meta {
   font-family: var(--mono);
-  font-size: 0.8125rem;       /* ~13px */
+  font-size: 0.75rem;
   color: var(--fg-muted);
   letter-spacing: 0.02em;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
   line-height: 1.5;
 }
 
 /* Body prose inside an iteration */
-.iter-body { max-width: 32rem; }
+.iter-body { max-width: 100%; }
 .iter-body p + p { margin-top: 0.85rem; }
 
-/* ---- Marginalia (aside) ----------------------------------- */
-/* Default: flow inline as a quiet paragraph */
+/* ---- Marginalia (aside) — MOBILE ---------------------------
+   On mobile, the aside is an inline block above the canvas with
+   a subtle left rule. NOT floated, NOT in a side gutter. */
 .marginalia {
+  display: block;
   font-family: var(--serif);
-  font-size: 0.875rem;        /* ~14px */
+  font-size: 0.95rem;
   line-height: 1.55;
   color: var(--fg-muted);
   font-style: italic;
   margin: 1.25rem 0;
-  padding-left: 1rem;
-  border-left: var(--hairline) solid var(--rule);
-}
-
-/* On wide viewports, float marginalia into the right gutter */
-@media (min-width: 60rem) {
-  .iter {
-    /* keep prose centered, hang aside to the right */
-    position: relative;
-  }
-  .marginalia {
-    float: right;
-    width: 14rem;
-    margin: 0.25rem -16rem 1rem 1.5rem;
-    padding-left: 0;
-    border-left: 0;
-    border-top: var(--hairline) solid var(--rule);
-    padding-top: 0.5rem;
-    font-size: 0.875rem;
-  }
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--rule);
+  width: 100%;
+  max-width: 100%;
+  float: none;
 }
 
 /* ---- Widget (canvas frame area) --------------------------- */
 .widget {
-  margin: 2.5rem 0 1rem;
+  margin: 1.5rem 0 1rem;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  /* allow canvas to break out beyond the 720px prose column */
+  align-items: stretch;
   width: 100%;
+}
+
+/* Canvases must shrink to fit the viewport on mobile. */
+.widget canvas,
+.widget pre.ascii-canvas,
+.widget svg {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
 }
 
 /* Controls under the canvas (Begin button, inputs, etc.) */
 .widget-controls {
-  margin-top: 1rem;
+  margin-top: 0.75rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
   align-items: center;
   justify-content: center;
   font-family: var(--mono);
@@ -211,40 +269,57 @@ body {
 .widget-status {
   margin-top: 0.75rem;
   font-family: var(--mono);
-  font-size: 0.875rem;
+  font-size: 0.85rem;
   color: var(--fg-muted);
   text-align: center;
-  min-height: 1.4em;          /* prevent layout shift */
+  min-height: 1.4em;
 }
 
-/* Buttons / inputs inside widgets */
+/* ---- Buttons / inputs (TAP-FRIENDLY DEFAULTS) -------------
+   44×44 minimum tap target per WCAG / Apple HIG.
+   Inputs use 16px font to suppress the iOS focus-zoom. */
 button,
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+select {
   font-family: var(--mono);
-  font-size: 0.9rem;
+  font-size: 16px;            /* 16px = no iOS zoom on focus */
   background: var(--bg-elev);
   color: var(--fg);
   border: var(--hairline) solid var(--rule);
-  padding: 0.4rem 0.8rem;
+  padding: 0.5rem 0.85rem;
   border-radius: 2px;
   letter-spacing: 0.02em;
+  min-height: var(--tap);     /* 44px */
+  line-height: 1.2;
 }
-button { cursor: pointer; }
-button:hover { border-color: var(--amber); color: var(--amber); }
+
+button {
+  cursor: pointer;
+  min-width: var(--tap);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button:hover  { border-color: var(--amber); color: var(--amber); }
+button:active { background: rgba(212, 162, 86, 0.08); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Inputs explicitly: don't let the browser stretch them too wide */
+input[type="text"],
+input[type="number"] {
+  max-width: 100%;
+}
 
 /* ---- Gesture line (under each canvas) --------------------- */
 .gesture {
-  margin-top: 1.25rem;
+  margin: 1.25rem auto 0;
   font-family: var(--serif);
   font-style: italic;
-  font-size: 1rem;
+  font-size: 0.95rem;
   color: var(--fg);
-  text-align: center;
-  max-width: 32rem;
-  margin-left: auto;
-  margin-right: auto;
-  line-height: 1.5;
+  text-align: left;
+  max-width: 100%;
+  line-height: 1.55;
 }
 .gesture .label {
   font-style: normal;
@@ -255,17 +330,27 @@ button:hover { border-color: var(--amber); color: var(--amber); }
 }
 
 /* ---- Footer ---------------------------------------------- */
+.page-footer,
 .site-footer {
-  margin-top: var(--section-pad);
-  padding: 2rem 0 3rem;
+  margin-top: 2.5rem;
+  padding: 1.5rem 0 2rem;
   border-top: var(--hairline) solid var(--rule);
-  font-size: 0.875rem;
+  font-size: 0.85rem;
   color: var(--fg-muted);
   line-height: 1.55;
 }
+.page-footer a,
 .site-footer a { color: var(--fg-muted); }
+.page-footer a:hover,
 .site-footer a:hover { color: var(--teal); }
-.site-footer p + p { margin-top: 0.5rem; }
+.page-footer p + p,
+.site-footer p + p { margin-top: 0.65rem; }
+
+.page-footer .sources,
+.site-footer .sources {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
 
 /* ---- Links ----------------------------------------------- */
 a {
@@ -282,24 +367,19 @@ a:hover { color: var(--amber); }
   outline-offset: 2px;
   border-radius: 2px;
 }
-/* Drop the default UA focus glow when we have a visible ring */
 :focus:not(:focus-visible) { outline: none; }
 
-/* ---- Reduced motion -------------------------------------- */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-
-/* ---- Print (just in case) -------------------------------- */
-@media print {
-  :root { --bg: #fff; --fg: #111; --fg-muted: #555; --rule: #ccc; }
-  body { background: #fff; color: #111; }
-  .widget canvas { border: 1px solid #999; }
+/* ---- Helpers used by index.html --------------------------- */
+.mono   { font-family: var(--mono); }
+.muted  { color: var(--fg-muted); }
+.nojs-note {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  padding: 1rem;
+  border: 1px dashed var(--rule);
+  background: var(--bg-elev);
+  text-align: center;
 }
 
 /* ---- Build stamp (cache-bust token, surfaced in footer) -- */
@@ -316,3 +396,215 @@ a:hover { color: var(--amber); }
   border-bottom: 1px dotted var(--rule);
 }
 .build-stamp a:hover { color: var(--teal); border-bottom-color: var(--teal); }
+
+/* =============================================================
+   TABLET  (>= 720px)
+   Slightly wider gutter, restore the editorial breathing room,
+   begin to constrain prose width. Marginalia returns to the side.
+   ============================================================= */
+@media (min-width: 720px) {
+  :root {
+    --section-pad: 5rem;
+  }
+
+  body {
+    padding: 2rem 2.5rem;
+    max-width: 760px;
+    margin-inline: auto;
+  }
+
+  .page {
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 1rem 0;
+  }
+
+  .page-header,
+  .site-header {
+    padding: 3rem 0 2.5rem;
+    margin-bottom: 4rem;
+  }
+
+  .page-title,
+  .site-title {
+    font-size: clamp(3rem, 7vw, 4.25rem);
+    letter-spacing: 0.18em;
+  }
+
+  .page-dates,
+  .site-dates {
+    font-size: 0.95rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .manifesto,
+  .site-manifesto {
+    max-width: 32rem;
+    font-size: 1.0625rem;       /* 17px */
+  }
+
+  .lineage {
+    margin: 4rem auto;
+    padding: 1.5rem 0;
+  }
+
+  .iter { padding: var(--section-pad) 0; }
+  .iter:first-of-type { padding-top: 2rem; }
+
+  .iter h2,
+  .iter-title {
+    font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+  }
+
+  .iter .meta,
+  .iter-meta {
+    font-size: 0.8125rem;
+    margin-bottom: 2rem;
+  }
+
+  .iter-body { max-width: 32rem; }
+
+  /* Marginalia: float into the right gutter on tablet+ */
+  .marginalia {
+    float: right;
+    width: 13rem;
+    margin: 0.25rem 0 1rem 1.5rem;
+    padding-left: 0;
+    border-left: 0;
+    border-top: var(--hairline) solid var(--rule);
+    padding-top: 0.5rem;
+    font-size: 0.85rem;
+    font-style: italic;
+  }
+
+  .widget { margin: 2.25rem 0 1rem; align-items: center; }
+
+  .widget-controls { gap: 0.75rem; font-size: 0.9rem; }
+  .widget-status   { font-size: 0.875rem; }
+
+  .gesture {
+    text-align: center;
+    max-width: 32rem;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .page-footer,
+  .site-footer {
+    margin-top: var(--section-pad);
+    padding: 2rem 0 3rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* =============================================================
+   DESKTOP  (>= 1024px)
+   The original museum-wall experience. Prose at ~720px, canvases
+   may visually break out wider via per-iteration rules.
+   ============================================================= */
+@media (min-width: 1024px) {
+  :root {
+    --section-pad: 6rem;
+  }
+
+  body {
+    max-width: 800px;
+    padding: 2.5rem 3rem;
+  }
+
+  .page-header,
+  .site-header {
+    padding: 4rem 0 3rem;
+    margin-bottom: var(--section-pad);
+  }
+
+  /* Marginalia hung into the wider right gutter — only space we
+     have once the body is locked at 800px. Negative right margin
+     lets it visually "hang" outside the prose column. */
+  .marginalia {
+    width: 14rem;
+    margin: 0.25rem -7rem 1rem 1.5rem;
+  }
+}
+
+/* =============================================================
+   PWA TOAST + INSTALL BUTTON
+   Mounted by the PWA agent. Style hooks only; the elements may
+   not always exist.
+   ============================================================= */
+.pwa-toast {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elev);
+  color: var(--fg);
+  padding: 0.75rem 1.25rem;
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  max-width: calc(100vw - 2rem);
+  text-align: center;
+}
+.pwa-toast:hover { background: var(--amber); color: var(--bg); }
+
+.pwa-install {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.6rem 1rem;
+  min-height: var(--tap);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: transparent;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 3px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.pwa-install:hover  { background: var(--amber); color: var(--bg); }
+.pwa-install:active { transform: scale(0.97); }
+
+/* =============================================================
+   CACHE-BUST BADGE  (cb-badge.js corner widget)
+   Make it less intrusive on small screens.
+   ============================================================= */
+@media (max-width: 719px) {
+  .cb-badge,
+  #cb-badge,
+  [data-cb-badge] {
+    transform: scale(0.75);
+    transform-origin: bottom right;
+    opacity: 0.7;
+  }
+}
+
+/* =============================================================
+   REDUCED MOTION
+   ============================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* =============================================================
+   PRINT
+   ============================================================= */
+@media print {
+  :root { --bg: #fff; --fg: #111; --fg-muted: #555; --rule: #ccc; }
+  body { background: #fff; color: #111; max-width: 100%; padding: 1cm; }
+  .widget canvas { border: 1px solid #999; }
+  .marginalia { float: none; width: auto; margin: 1rem 0; }
+  .pwa-toast, .pwa-install, .cb-badge, #cb-badge { display: none !important; }
+}
