@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 700 140"
+     preserveAspectRatio="xMidYMid meet"
+     role="img"
+     aria-labelledby="lineage-title lineage-desc">
+  <title id="lineage-title">Catapult game lineage, 1972 to 2009</title>
+  <desc id="lineage-desc">Five nodes: Artillery 1976, Smithereens 1982, Defender 1986, Scorched 1991 (parallel branch), and Crush the Castle 2009. Arrows show that Artillery seeds Smithereens, Smithereens' front-view framing is inherited by Defender, and Defender's pullback gesture is rotated ninety degrees onto Crush's side view, with Scorched contributing the side-view duel convention.</desc>
+
+  <defs>
+    <!-- Arrowhead: thin triangle in fg color -->
+    <marker id="arrow-fg" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#e6e1d4" />
+    </marker>
+    <!-- Arrowhead: amber accent for the surprise lineage -->
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#d4a256" />
+    </marker>
+  </defs>
+
+  <!-- ============= Arrows (drawn first, behind nodes) ============= -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- 01 Artillery (1976) -> 02 Smithereens (1982) : shared front-view-castle framing -->
+    <!-- node centers: 01 at (80,55), 02 at (220,55). Slight hand-drawn curve. -->
+    <path d="M 122 55 C 150 50, 175 60, 178 55"
+          stroke="#e6e1d4" stroke-width="1.5"
+          marker-end="url(#arrow-fg)" />
+
+    <!-- 02 Smithereens (1982) -> 03 Defender (1986) : front-view siege framing inherited -->
+    <path d="M 262 55 C 290 60, 315 50, 318 55"
+          stroke="#e6e1d4" stroke-width="1.5"
+          marker-end="url(#arrow-fg)" />
+
+    <!-- 03 Defender (1986) -> 05 Crush the Castle (2009) : pullback rotated 90 deg onto side view.
+         ACCENT ARROW. Long arc skipping over the 04 branch. -->
+    <path d="M 402 55 C 470 18, 540 18, 598 55"
+          stroke="#d4a256" stroke-width="1.75"
+          marker-end="url(#arrow-amber)" />
+
+    <!-- 04 Scorched / Gorillas (1991) : parallel branch, sits below the main row.
+         Arrow into 05 (side-view duel convergence). -->
+    <path d="M 500 108 C 540 100, 575 80, 595 70"
+          stroke="#e6e1d4" stroke-width="1.5"
+          marker-end="url(#arrow-fg)" />
+
+  </g>
+
+  <!-- ============= Nodes ============= -->
+  <!-- Each node: a thin-stroked rounded rectangle, year on top, title below.
+       Slight irregularity comes from drawing with paths instead of <rect>. -->
+
+  <g font-family="ui-monospace, Menlo, Consolas, monospace"
+     fill="#e6e1d4"
+     text-anchor="middle">
+
+    <!-- 01 Artillery (1976) — origin node, no accent ring (amber lives on the 03->05 arrow) -->
+    <g>
+      <path d="M 42 35 L 118 35 Q 122 35 122 39 L 122 71 Q 122 75 118 75 L 42 75 Q 38 75 38 71 L 38 39 Q 38 35 42 35 z"
+            fill="#15171a" stroke="#e6e1d4" stroke-width="1.25" />
+      <text x="80" y="52" font-size="11" letter-spacing="0.05em">1976</text>
+      <text x="80" y="67" font-size="10" fill="#8a8275">Artillery</text>
+    </g>
+
+    <!-- 02 Smithereens (1982) -->
+    <g>
+      <path d="M 184 35 L 258 35 Q 262 35 262 39 L 262 71 Q 262 75 258 75 L 184 75 Q 180 75 180 71 L 180 39 Q 180 35 184 35 z"
+            fill="#15171a" stroke="#e6e1d4" stroke-width="1.25" />
+      <text x="221" y="52" font-size="11" letter-spacing="0.05em">1982</text>
+      <text x="221" y="67" font-size="10" fill="#8a8275">Smithereens</text>
+    </g>
+
+    <!-- 03 Defender of the Crown (1986) -->
+    <g>
+      <path d="M 322 35 L 398 35 Q 402 35 402 39 L 402 71 Q 402 75 398 75 L 322 75 Q 318 75 318 71 L 318 39 Q 318 35 322 35 z"
+            fill="#15171a" stroke="#e6e1d4" stroke-width="1.25" />
+      <text x="360" y="52" font-size="11" letter-spacing="0.05em">1986</text>
+      <text x="360" y="67" font-size="10" fill="#8a8275">Defender</text>
+    </g>
+
+    <!-- 04 Scorched / Gorillas (1991) — parallel branch, lower row -->
+    <g>
+      <path d="M 462 88 L 538 88 Q 542 88 542 92 L 542 124 Q 542 128 538 128 L 462 128 Q 458 128 458 124 L 458 92 Q 458 88 462 88 z"
+            fill="#15171a" stroke="#e6e1d4" stroke-width="1.25" />
+      <text x="500" y="105" font-size="11" letter-spacing="0.05em">1991</text>
+      <text x="500" y="120" font-size="10" fill="#8a8275">Scorched</text>
+    </g>
+
+    <!-- 05 Crush the Castle (2009) -->
+    <g>
+      <path d="M 602 35 L 678 35 Q 682 35 682 39 L 682 71 Q 682 75 678 75 L 602 75 Q 598 75 598 71 L 598 39 Q 598 35 602 35 z"
+            fill="#15171a" stroke="#e6e1d4" stroke-width="1.25" />
+      <text x="640" y="52" font-size="11" letter-spacing="0.05em">2009</text>
+      <text x="640" y="67" font-size="10" fill="#8a8275">Crush</text>
+    </g>
+
+  </g>
+</svg>

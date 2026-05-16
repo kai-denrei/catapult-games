@@ -1,0 +1,104 @@
+/* =============================================================
+   CATAPULT — iterations.css
+   Per-iteration scoping. Most chrome lives in base.css; this file
+   only carries the canvas-frame treatment and the small era-
+   specific rendering hints (mono pre for 1976, pixelated for 1982).
+
+   Spec forbids fake era chrome (no CRT scanlines on 1976,
+   no fake Amiga dithering on 1986). Keep this file lean.
+   ============================================================= */
+
+/* ---- Shared canvas frame ---------------------------------- */
+/* Goal: "framed plate in a book", not "UI panel".
+   Thin amber inset hairline + soft elev mat around the plate. */
+.iter .widget canvas,
+.iter .widget pre.ascii-canvas {
+  background: var(--bg-elev);
+  border: 1px solid var(--amber);
+  box-shadow:
+    inset 0 0 0 1px rgba(212, 162, 86, 0.18),
+    0 0 0 8px var(--bg-elev),
+    0 0 0 9px var(--rule);
+  border-radius: 1px;
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---- 01 Artillery (1976) ---------------------------------- */
+/* ASCII rendered to a <pre> styled as a "canvas plate". */
+.iter-01 .widget pre.ascii-canvas,
+.iter-01 .widget .ascii-canvas {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.15;
+  color: var(--fg);
+  white-space: pre;
+  padding: 1rem 1.25rem;
+  margin: 0;
+  overflow: hidden;
+  /* keep within the prose breakout width */
+  min-width: 0;
+}
+
+/* Input row for angle / power / fire — purely typographic */
+.iter-01 .widget-controls label {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.iter-01 .widget-controls input[type="number"],
+.iter-01 .widget-controls input[type="text"] {
+  width: 5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 02 Smithereens! (1982) ------------------------------- */
+/* Chunky 8x8 blocks: crisp pixels, no smoothing. */
+.iter-02 .widget canvas {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+/* ---- 03 Defender of the Crown (1986) ---------------------- */
+/* No pixelation: 1986 Amiga vibe is smoother than 8-bit.
+   Pullback affordance — show a power meter inline if the dev
+   agent adds one as a <progress> or .meter element. */
+.iter-03 .widget .ammo-toggle {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.iter-03 .widget .ammo-toggle [aria-pressed="true"] {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.iter-03 .widget .garrison {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--blood);
+}
+
+/* ---- 04 Gorillas / Scorched Earth (1991) ------------------ */
+/* Side-view with a wind arrow header. Keep numerals tabular
+   so the angle/power readout doesn't jitter. */
+.iter-04 .widget-controls,
+.iter-04 .widget-status {
+  font-variant-numeric: tabular-nums;
+}
+.iter-04 .widget .wind-readout {
+  font-family: var(--mono);
+  color: var(--teal);
+  letter-spacing: 0.04em;
+}
+
+/* ---- 05 Crush the Castle / Angry Birds (2009) ------------- */
+/* Drag-slingshot. The trajectory-preview dots should sit on
+   top of the canvas; nothing needed here beyond the shared
+   frame, but reserve the hook for cursor affordance. */
+.iter-05 .widget canvas { cursor: grab; }
+.iter-05 .widget canvas:active { cursor: grabbing; }

@@ -1,0 +1,303 @@
+/* =============================================================
+   CATAPULT — base.css
+   Museum-wall editorial chrome. Dark palette, transitional serif,
+   generous rhythm. System font stack only (no @font-face).
+   ============================================================= */
+
+/* ---- Tokens ------------------------------------------------ */
+:root {
+  /* Palette (CATAPULT.md §Aesthetic) */
+  --bg:        #0d0e10;
+  --bg-elev:   #15171a;
+  --fg:        #e6e1d4;
+  --fg-muted:  #8a8275;
+  --rule:      #2a2c30;
+  --amber:     #d4a256;
+  --teal:      #5fb5b0;
+  --blood:     #8a3a32;
+
+  /* Typography stacks (system fallbacks only) */
+  --serif: 'EB Garamond', 'Iowan Old Style', Charter, Georgia, 'Times New Roman', serif;
+  --mono:  'JetBrains Mono', ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Rhythm */
+  --measure: 36rem;        /* ~720px prose column at 17px base */
+  --section-pad: 6rem;     /* vertical breathing between sections */
+  --hairline: 1px;
+}
+
+/* ---- Reset (minimal, hand-rolled) -------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body, h1, h2, h3, h4, p, ul, ol, figure, aside, blockquote, pre { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+img, svg, canvas { display: block; max-width: 100%; }
+button, input, textarea { font: inherit; color: inherit; }
+
+/* ---- Base ------------------------------------------------- */
+html, body { background: var(--bg); color: var(--fg); }
+body {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  padding: 0;
+  /* leave room for sticky right-gutter nav on wide viewports */
+}
+
+/* ---- Selection -------------------------------------------- */
+::selection { background: var(--amber); color: var(--bg); }
+
+/* ---- Page container --------------------------------------- */
+.page {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 4rem 1.5rem 2rem;
+}
+
+/* ---- Header ----------------------------------------------- */
+.site-header {
+  text-align: left;
+  padding-bottom: 3rem;
+  border-bottom: var(--hairline) solid var(--rule);
+  margin-bottom: var(--section-pad);
+}
+
+.site-title {
+  font-family: var(--serif);
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: clamp(2.5rem, 6vw, 4.25rem);
+  line-height: 1.05;
+  margin-bottom: 0.5rem;
+}
+
+.site-dates {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  color: var(--amber);
+  margin-bottom: 1.5rem;
+}
+
+.site-manifesto {
+  max-width: 32rem;
+  color: var(--fg);
+  font-size: 1.0625rem; /* 17px */
+}
+
+.site-manifesto p + p { margin-top: 0.75rem; }
+
+/* ---- Lineage SVG block ------------------------------------ */
+.lineage {
+  margin: var(--section-pad) auto;
+  padding: 1.5rem 0;
+  border-top: var(--hairline) solid var(--rule);
+  border-bottom: var(--hairline) solid var(--rule);
+}
+.lineage object,
+.lineage svg,
+.lineage img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ---- Iteration sections ----------------------------------- */
+.iter {
+  padding: var(--section-pad) 0;
+  border-top: var(--hairline) solid var(--rule);
+  position: relative;
+}
+.iter:first-of-type { border-top: 0; padding-top: 2rem; }
+
+.iter-label {
+  font-family: var(--mono);
+  font-size: 0.8125rem;       /* ~13px */
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 0.75rem;
+}
+
+.iter-title {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+  letter-spacing: -0.005em;
+  line-height: 1.15;
+  margin-bottom: 0.5rem;
+}
+
+.iter-title .year {
+  color: var(--amber);
+  font-weight: 600;
+  font-variant-numeric: lining-nums tabular-nums;
+  margin-right: 0.4em;
+}
+
+/* Metadata strip — under the title */
+.iter-meta {
+  font-family: var(--mono);
+  font-size: 0.8125rem;       /* ~13px */
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+  margin-bottom: 2rem;
+  line-height: 1.5;
+}
+
+/* Body prose inside an iteration */
+.iter-body { max-width: 32rem; }
+.iter-body p + p { margin-top: 0.85rem; }
+
+/* ---- Marginalia (aside) ----------------------------------- */
+/* Default: flow inline as a quiet paragraph */
+.marginalia {
+  font-family: var(--serif);
+  font-size: 0.875rem;        /* ~14px */
+  line-height: 1.55;
+  color: var(--fg-muted);
+  font-style: italic;
+  margin: 1.25rem 0;
+  padding-left: 1rem;
+  border-left: var(--hairline) solid var(--rule);
+}
+
+/* On wide viewports, float marginalia into the right gutter */
+@media (min-width: 60rem) {
+  .iter {
+    /* keep prose centered, hang aside to the right */
+    position: relative;
+  }
+  .marginalia {
+    float: right;
+    width: 14rem;
+    margin: 0.25rem -16rem 1rem 1.5rem;
+    padding-left: 0;
+    border-left: 0;
+    border-top: var(--hairline) solid var(--rule);
+    padding-top: 0.5rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* ---- Widget (canvas frame area) --------------------------- */
+.widget {
+  margin: 2.5rem 0 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* allow canvas to break out beyond the 720px prose column */
+  width: 100%;
+}
+
+/* Controls under the canvas (Begin button, inputs, etc.) */
+.widget-controls {
+  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  color: var(--fg);
+}
+
+.widget-status {
+  margin-top: 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  text-align: center;
+  min-height: 1.4em;          /* prevent layout shift */
+}
+
+/* Buttons / inputs inside widgets */
+button,
+input[type="text"],
+input[type="number"] {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: var(--hairline) solid var(--rule);
+  padding: 0.4rem 0.8rem;
+  border-radius: 2px;
+  letter-spacing: 0.02em;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--amber); color: var(--amber); }
+
+/* ---- Gesture line (under each canvas) --------------------- */
+.gesture {
+  margin-top: 1.25rem;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1rem;
+  color: var(--fg);
+  text-align: center;
+  max-width: 32rem;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.5;
+}
+.gesture .label {
+  font-style: normal;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+  margin-right: 0.4em;
+}
+
+/* ---- Footer ---------------------------------------------- */
+.site-footer {
+  margin-top: var(--section-pad);
+  padding: 2rem 0 3rem;
+  border-top: var(--hairline) solid var(--rule);
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  line-height: 1.55;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--teal); }
+.site-footer p + p { margin-top: 0.5rem; }
+
+/* ---- Links ----------------------------------------------- */
+a {
+  color: var(--teal);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+a:hover { color: var(--amber); }
+
+/* ---- Focus styles (a11y; required for keyboard play) ----- */
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+/* Drop the default UA focus glow when we have a visible ring */
+:focus:not(:focus-visible) { outline: none; }
+
+/* ---- Reduced motion -------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- Print (just in case) -------------------------------- */
+@media print {
+  :root { --bg: #fff; --fg: #111; --fg-muted: #555; --rule: #ccc; }
+  body { background: #fff; color: #111; }
+  .widget canvas { border: 1px solid #999; }
+}
