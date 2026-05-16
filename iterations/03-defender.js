@@ -2,49 +2,58 @@
 // Gesture preserved: analog pull-back tension. Hold to wind, release to fire.
 // Launch angle is fixed by the catapult's geometry; the player aims by power only.
 //
-// Two views, one simulation: SIDE PROFILE (left) and OVER THE SHOULDER (right).
-// The over-the-shoulder framing is the iconic Cinemaware shot — POV from behind
-// the trebuchet, looking past the swinging arm into the distance at the wall.
-// Both canvases render the same shared state every frame; the gesture binds to
-// the widget container so a hold on either canvas (or anywhere in the widget)
-// drives the same pull-back.
+// Two INDEPENDENT games, side by side:
+//   SIDE PROFILE  — the original siege: 6 shots, 3 ammo types, breach the wall.
+//   SAXON CASTLE  — over-the-shoulder column-knock: 6 shots, boulder only,
+//                   destroy any single vertical column (3 hits) to win.
+//
+// Each panel has its own state, controls, pull-back gesture and win/lose loop.
+// One rAF loop drives both. mount(rootEl) is idempotent — a second call tears
+// down all listeners and rebuilds cleanly.
 
 import { attachCanvas } from '../lib/canvas.js';
 import { holdTension } from '../lib/input.js';
 
-// ---- Shared world (side-view coordinate system, also used for collisions) ---
+// ---- Canvas dimensions (shared) -----------------------------------------
 const W = 640;
 const H = 400;
 
-const GROUND_Y      = 360;                 // foreground horizon (catapult sits on this)
-const WALL_BASE_Y   = 240;                 // bottom edge of wall band
-const WALL_X        = 180;                 // left edge of wall band
-const WALL_W        = 340;                 // wall band width
-const WALL_COLS     = 12;
-const WALL_ROWS     = 3;
-const BRICK_W       = WALL_W / WALL_COLS;
-const BRICK_H       = 26;
-const WALL_TOP_Y    = WALL_BASE_Y - WALL_ROWS * BRICK_H;
+// ---- Side-view world (collision space for the SIDE game) ----------------
+const GROUND_Y      = 360;
+const WALL_BASE_Y   = 240;
+const WALL_X        = 180;
+const WALL_W        = 340;
+const SIDE_COLS     = 12;
+const SIDE_ROWS     = 3;
+const SIDE_BRICK_W  = WALL_W / SIDE_COLS;
+const SIDE_BRICK_H  = 26;
+const WALL_TOP_Y    = WALL_BASE_Y - SIDE_ROWS * SIDE_BRICK_H;
 
-const PIVOT_X       = 90;                  // catapult pivot location (side view)
+const PIVOT_X       = 90;
 const PIVOT_Y       = GROUND_Y - 18;
 const ARM_LEN       = 70;
-const ARM_REST_ANG  = -Math.PI / 2 - 0.35; // arm starts up-and-slightly-back (cocked-ready)
-const ARM_PULL_MAX  = 0.95;                // additional radians the arm rotates back while held
-const PULL_FULL_MS  = 1500;                // hold this long for max power
-const LAUNCH_ANGLE  = (58 * Math.PI) / 180;// FIXED: degrees above horizontal at release
+const ARM_REST_ANG  = -Math.PI / 2 - 0.35;
+const ARM_PULL_MAX  = 0.95;
+const PULL_FULL_MS  = 1500;
+const LAUNCH_ANGLE  = (58 * Math.PI) / 180;
 
-const V_MIN         = 200;                 // px/s at zero pull
-const V_MAX         = 560;                 // px/s at full pull
-const GRAVITY       = 900;                 // px/s^2
+const V_MIN         = 200;
+const V_MAX         = 560;
+const GRAVITY       = 900;
 
-const MAX_SHOTS     = 6;
-const GARRISON_MAX  = 100;
-const FIRE_DAMAGE   = 22;                  // Greek fire base damage to garrison
-// Disease damage scales with how early it is used. Index 0 = first shot.
+// ---- Side game rules ----------------------------------------------------
+const SIDE_MAX_SHOTS  = 6;
+const GARRISON_MAX    = 100;
+const FIRE_DAMAGE     = 22;
 const DISEASE_DAMAGE_BY_INDEX = [70, 60, 48, 34, 22, 12];
 
-// Color tokens — read from CSS vars at mount, fall back to literals.
+// ---- Front game rules ---------------------------------------------------
+const FRONT_MAX_SHOTS = 6;
+const FRONT_COLS      = 8;
+const FRONT_ROWS      = 4;
+const HITS_TO_FELL    = 3;       // hits in one column to win
+
+// ---- Color tokens -------------------------------------------------------
 function readTokens(rootEl) {
   const cs = getComputedStyle(rootEl);
   const get = (name, fallback) => {
@@ -63,157 +72,165 @@ function readTokens(rootEl) {
   };
 }
 
+// =========================================================================
+// MOUNT
+// =========================================================================
 export function mount(rootEl) {
-  // Idempotency: nuke whatever was here.
+  // Idempotency.
   rootEl.innerHTML = '';
 
   const T = readTokens(rootEl);
 
-  // ---- DOM scaffolding ----------------------------------------------------
-  const wrap = document.createElement('div');
-  wrap.className = 'defender-widget';
-  wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;';
-  // The widget itself swallows the pull-back gesture — pointer-down on either
-  // canvas (or the gap between them) winds the catapult.
-  wrap.setAttribute('tabindex', '0');
-  wrap.style.outline = 'none';
-  rootEl.appendChild(wrap);
-
-  // HUD strip above the stage.
-  const hud = document.createElement('div');
-  hud.style.cssText = [
-    'display:flex','gap:14px','align-items:center','justify-content:space-between',
-    'width:100%','max-width:720px','font-family:ui-monospace,Menlo,Consolas,monospace',
-    'font-size:12px','color:' + T.fgMuted,'padding:4px 2px',
-  ].join(';');
-  wrap.appendChild(hud);
-
-  const shotsEl    = document.createElement('span');
-  const garrisonEl = document.createElement('span');
-  const statusEl   = document.createElement('span');
-  shotsEl.style.color = T.fg;
-  garrisonEl.style.color = T.fg;
-  statusEl.style.color  = T.amber;
-  hud.append(shotsEl, garrisonEl, statusEl);
-
-  // Stage: two canvases side-by-side, wraps on narrow screens.
+  // ---- DOM scaffolding --------------------------------------------------
   const stage = document.createElement('div');
+  stage.className = 'iter-stage';
   stage.style.cssText = [
     'display:flex','flex-direction:row','flex-wrap:wrap',
     'gap:14px','justify-content:center','align-items:flex-start',
-    'width:100%','cursor:crosshair',
+    'width:100%',
   ].join(';');
-  wrap.appendChild(stage);
+  rootEl.appendChild(stage);
 
-  // Each panel = caption + canvas, stacked vertically.
-  const mkPanel = (caption) => {
-    const panel = document.createElement('div');
-    panel.style.cssText = [
-      'display:flex','flex-direction:column','align-items:center','gap:6px',
-      'flex:1 1 320px','min-width:280px','max-width:480px',
-    ].join(';');
-    const cap = document.createElement('div');
-    cap.textContent = caption;
-    cap.style.cssText = [
-      'font-family:ui-monospace,Menlo,Consolas,monospace','font-size:11px',
-      'letter-spacing:0.12em','color:' + T.fgMuted,'text-transform:uppercase',
-    ].join(';');
-    panel.appendChild(cap);
-    return panel;
-  };
+  const sideRefs  = buildPanel(stage, T, 'iter-panel--side',  'SIDE PROFILE');
+  const frontRefs = buildPanel(stage, T, 'iter-panel--front', 'SAXON CASTLE');
 
-  const sidePanel  = mkPanel('Side profile');
-  const frontPanel = mkPanel('Over the shoulder');
-  stage.append(sidePanel, frontPanel);
+  // ---- Build the two games ----------------------------------------------
+  const sideGame  = createSideGame(sideRefs, T);
+  const frontGame = createFrontGame(frontRefs, T);
 
-  // Both canvases: 640x400 internal, displayed responsively.
-  const sideAttached  = attachCanvas(sidePanel,  { width: W, height: H });
-  const frontAttached = attachCanvas(frontPanel, { width: W, height: H });
-  const sideCanvas  = sideAttached.canvas;
-  const sideCtx     = sideAttached.ctx;
-  const frontCanvas = frontAttached.canvas;
-  const frontCtx    = frontAttached.ctx;
-  for (const c of [sideCanvas, frontCanvas]) {
-    c.style.display    = 'block';
-    c.style.width      = '100%';
-    c.style.height     = 'auto';
-    c.style.maxWidth   = '100%';
-    c.style.cursor     = 'crosshair';
+  // ---- Render loop (single rAF, both games ticked & drawn) --------------
+  let raf = 0;
+  let lastT = performance.now();
+
+  function loop(now) {
+    const dt = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
+    sideGame.step(dt);
+    frontGame.step(dt);
+    sideGame.draw();
+    frontGame.draw();
+    raf = requestAnimationFrame(loop);
   }
+  raf = requestAnimationFrame((t) => { lastT = t; loop(t); });
 
-  // Ammo selector + reset row, beneath the stage, applies to both views.
+  // ---- Cleanup ----------------------------------------------------------
+  return function cleanup() {
+    cancelAnimationFrame(raf);
+    sideGame.cleanup();
+    frontGame.cleanup();
+    rootEl.innerHTML = '';
+  };
+}
+
+// =========================================================================
+// PANEL BUILDER — caption + canvas + controls container
+// =========================================================================
+function buildPanel(stage, T, modifier, caption) {
+  const panel = document.createElement('div');
+  panel.className = 'iter-panel ' + modifier;
+  panel.style.cssText = [
+    'display:flex','flex-direction:column','align-items:stretch','gap:6px',
+    'flex:1 1 320px','min-width:280px','max-width:480px',
+  ].join(';');
+
+  const cap = document.createElement('div');
+  cap.className = 'iter-cap mono';
+  cap.textContent = caption;
+  cap.style.cssText = [
+    'font-family:ui-monospace,Menlo,Consolas,monospace','font-size:11px',
+    'letter-spacing:0.12em','color:' + T.fgMuted,'text-transform:uppercase',
+    'text-align:center',
+  ].join(';');
+  panel.appendChild(cap);
+
+  // Canvas wrapper — separately so the canvas can size to it.
+  const canvasWrap = document.createElement('div');
+  canvasWrap.style.cssText = 'width:100%;';
+  panel.appendChild(canvasWrap);
+
+  const attached = attachCanvas(canvasWrap, { width: W, height: H });
+  const canvas = attached.canvas;
+  const ctx = attached.ctx;
+  canvas.style.display  = 'block';
+  canvas.style.width    = '100%';
+  canvas.style.height   = 'auto';
+  canvas.style.maxWidth = '100%';
+  canvas.style.cursor   = 'crosshair';
+  canvas.style.outline  = 'none';
+
+  // Controls row, beneath the canvas.
   const controls = document.createElement('div');
   controls.style.cssText = [
-    'display:flex','gap:8px','align-items:center','justify-content:center',
-    'flex-wrap:wrap','width:100%','max-width:720px',
-    'font-family:ui-monospace,Menlo,Consolas,monospace','font-size:12px','padding:4px 0',
+    'display:flex','gap:6px','align-items:center','justify-content:center',
+    'flex-wrap:wrap','width:100%',
+    'font-family:ui-monospace,Menlo,Consolas,monospace','font-size:12px',
+    'padding:4px 0','color:' + T.fgMuted,
   ].join(';');
-  wrap.appendChild(controls);
+  panel.appendChild(controls);
 
-  const mkBtn = (label) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = label;
-    b.style.cssText = [
-      'font:inherit','padding:4px 10px','background:' + T.bgElev,'color:' + T.fg,
-      'border:1px solid ' + T.rule,'cursor:pointer','letter-spacing:0.04em',
-    ].join(';');
-    return b;
-  };
+  stage.appendChild(panel);
+  return { panel, canvas, ctx, controls };
+}
 
-  const btnBoulder = mkBtn('Boulder');
-  const btnFire    = mkBtn('Greek fire');
-  const btnDisease = mkBtn('Disease');
-  const btnReset   = mkBtn('New siege');
-  btnReset.style.marginLeft = '12px';
+function mkButton(label, T) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.style.cssText = [
+    'font:inherit','padding:4px 10px','background:' + T.bgElev,'color:' + T.fg,
+    'border:1px solid ' + T.rule,'cursor:pointer','letter-spacing:0.04em',
+  ].join(';');
+  return b;
+}
+
+function ammoColor(kind, T) {
+  if (kind === 'boulder') return T.fgMuted;
+  if (kind === 'fire')    return T.amber;
+  if (kind === 'disease') return T.teal;
+  return T.fg;
+}
+
+// =========================================================================
+// SIDE GAME — the original 1986 siege
+// =========================================================================
+function createSideGame(refs, T) {
+  const { canvas, ctx, controls } = refs;
+
+  // ---- Controls ---------------------------------------------------------
+  const btnBoulder = mkButton('Boulder', T);
+  const btnFire    = mkButton('Greek fire', T);
+  const btnDisease = mkButton('Disease', T);
+  const btnReset   = mkButton('New siege', T);
+  btnReset.style.marginLeft  = '8px';
   btnReset.style.borderColor = T.teal;
   controls.append(btnBoulder, btnFire, btnDisease, btnReset);
 
-  // ---- Game state ---------------------------------------------------------
+  // ---- State ------------------------------------------------------------
   let state;
-
   function freshState() {
-    // Brick grid: bricks[row][col] = true if standing.
-    const bricks = Array.from({ length: WALL_ROWS }, () =>
-      Array.from({ length: WALL_COLS }, () => true));
     return {
       shotsFired: 0,
       garrison:   GARRISON_MAX,
       ammo:       'boulder',
-      bricks,
-      breached:   false,         // sticky: once true, fire/disease unlock
+      bricks: Array.from({ length: SIDE_ROWS }, () =>
+        Array.from({ length: SIDE_COLS }, () => true)),
+      breached:   false,
       arm: { angle: ARM_REST_ANG, pulling: false, pullMs: 0 },
-      projectile: null,          // { x, y, vx, vy, kind } while in flight
-      lastResult: '',            // ephemeral message under HUD
+      projectile: null,
+      lastResult: '',
       gameOver: false,
       won: false,
     };
   }
 
   function refreshControls() {
-    btnFire.disabled    = !state.breached || state.gameOver || state.projectile;
-    btnDisease.disabled = !state.breached || state.gameOver || state.projectile;
+    btnFire.disabled    = !state.breached || state.gameOver || !!state.projectile;
+    btnDisease.disabled = !state.breached || state.gameOver || !!state.projectile;
     btnBoulder.disabled = state.gameOver || !!state.projectile;
     const dim = (b) => { b.style.opacity = b.disabled ? '0.35' : '1'; };
     [btnBoulder, btnFire, btnDisease].forEach(dim);
-    // Highlight current selection.
     for (const [b, kind] of [[btnBoulder,'boulder'],[btnFire,'fire'],[btnDisease,'disease']]) {
       b.style.borderColor = (state.ammo === kind && !b.disabled) ? T.amber : T.rule;
-    }
-  }
-
-  function refreshHud() {
-    shotsEl.textContent    = 'shots: ' + (MAX_SHOTS - state.shotsFired) + ' / ' + MAX_SHOTS;
-    garrisonEl.textContent = 'garrison: ' + Math.max(0, state.garrison);
-    if (state.gameOver) {
-      statusEl.textContent = state.won ? 'SIEGE WON' : 'SIEGE LOST';
-      statusEl.style.color = state.won ? T.teal : T.blood;
-    } else if (state.lastResult) {
-      statusEl.textContent = state.lastResult;
-      statusEl.style.color = T.amber;
-    } else {
-      statusEl.textContent = state.breached ? 'breach open' : 'breach the wall';
-      statusEl.style.color = state.breached ? T.teal : T.fgMuted;
     }
   }
 
@@ -224,16 +241,17 @@ export function mount(rootEl) {
     refreshControls();
   }
 
-  btnBoulder.addEventListener('click', () => selectAmmo('boulder'));
-  btnFire.addEventListener('click',    () => selectAmmo('fire'));
-  btnDisease.addEventListener('click', () => selectAmmo('disease'));
-  btnReset.addEventListener('click',   () => { state = freshState(); refreshControls(); refreshHud(); });
+  const onBoulder = () => selectAmmo('boulder');
+  const onFire    = () => selectAmmo('fire');
+  const onDisease = () => selectAmmo('disease');
+  const onReset   = () => { state = freshState(); refreshControls(); };
+  btnBoulder.addEventListener('click', onBoulder);
+  btnFire.addEventListener('click',    onFire);
+  btnDisease.addEventListener('click', onDisease);
+  btnReset.addEventListener('click',   onReset);
 
-  // ---- Pull-back gesture --------------------------------------------------
-  // Bound to the WIDGET wrapper, not to a canvas, so a press on either view
-  // (or in the gap between them) starts the same pull-back. Both canvases
-  // and the wrap itself are focusable for the keyboard (Space) fallback.
-  const cleanupTension = holdTension(wrap, {
+  // ---- Pull-back gesture — bound to THIS canvas only --------------------
+  const cleanupTension = holdTension(canvas, {
     onStart: () => {
       if (state.gameOver || state.projectile) return;
       state.arm.pulling = true;
@@ -244,7 +262,6 @@ export function mount(rootEl) {
       if (!state.arm.pulling) return;
       const t = Math.min(1, ms / PULL_FULL_MS);
       state.arm.pullMs = ms;
-      // Arm rotates back (more negative / further from launch direction) as we wind.
       state.arm.angle = ARM_REST_ANG - ARM_PULL_MAX * t;
     },
     onRelease: (ms) => {
@@ -254,67 +271,58 @@ export function mount(rootEl) {
         state.arm.angle = ARM_REST_ANG;
         return;
       }
-      // Linear power mapping: pullback duration -> [V_MIN, V_MAX].
       const power = Math.min(1, ms / PULL_FULL_MS);
       const v     = V_MIN + (V_MAX - V_MIN) * power;
       fire(v);
-      // Snap arm back to rest immediately; the catapult re-cocks for next shot.
       state.arm.angle = ARM_REST_ANG;
     },
   });
 
   function fire(v) {
-    // Launch point = tip of the arm at rest angle (just after release).
     const launchX = PIVOT_X + Math.cos(ARM_REST_ANG) * ARM_LEN;
     const launchY = PIVOT_Y + Math.sin(ARM_REST_ANG) * ARM_LEN;
-    // Fixed angle, positive vx (toward wall on the right).
     const vx =  v * Math.cos(LAUNCH_ANGLE);
     const vy = -v * Math.sin(LAUNCH_ANGLE);
     state.projectile = {
       x: launchX, y: launchY, vx, vy,
       kind: state.ammo,
-      shotIndex: state.shotsFired,   // 0..MAX_SHOTS-1
+      shotIndex: state.shotsFired,
     };
     state.lastResult = '';
     refreshControls();
   }
 
-  // ---- Impact resolution --------------------------------------------------
+  // ---- Collision helpers ------------------------------------------------
   function brickAt(x, y) {
     if (x < WALL_X || x >= WALL_X + WALL_W) return null;
     if (y < WALL_TOP_Y || y >= WALL_BASE_Y) return null;
-    const col = Math.floor((x - WALL_X) / BRICK_W);
-    const row = Math.floor((y - WALL_TOP_Y) / BRICK_H);
-    if (col < 0 || col >= WALL_COLS || row < 0 || row >= WALL_ROWS) return null;
+    const col = Math.floor((x - WALL_X) / SIDE_BRICK_W);
+    const row = Math.floor((y - WALL_TOP_Y) / SIDE_BRICK_H);
+    if (col < 0 || col >= SIDE_COLS || row < 0 || row >= SIDE_ROWS) return null;
     return { col, row };
   }
-
   function recomputeBreach() {
     if (state.breached) return;
-    for (let c = 0; c < WALL_COLS; c++) {
+    for (let c = 0; c < SIDE_COLS; c++) {
       let empty = true;
-      for (let r = 0; r < WALL_ROWS; r++) {
+      for (let r = 0; r < SIDE_ROWS; r++) {
         if (state.bricks[r][c]) { empty = false; break; }
       }
       if (empty) { state.breached = true; return; }
     }
   }
-
   function wallStanding() {
-    for (let r = 0; r < WALL_ROWS; r++)
-      for (let c = 0; c < WALL_COLS; c++)
+    for (let r = 0; r < SIDE_ROWS; r++)
+      for (let c = 0; c < SIDE_COLS; c++)
         if (state.bricks[r][c]) return true;
     return false;
   }
-
   function applyImpact(p) {
     let removed = 0;
     if (p.kind === 'boulder') {
-      // Knock out the hit brick plus its immediate vertical neighbour if grazing.
       const hit = brickAt(p.x, p.y);
       if (hit) {
         if (state.bricks[hit.row][hit.col]) { state.bricks[hit.row][hit.col] = false; removed++; }
-        // 50% chance a neighbour-by-position above also chips if the boulder is fast.
         const speed = Math.hypot(p.vx, p.vy);
         if (speed > 400) {
           const r2 = hit.row - 1;
@@ -324,45 +332,34 @@ export function mount(rootEl) {
       recomputeBreach();
       state.lastResult = removed ? ('boulder: -' + removed + ' brick' + (removed>1?'s':'')) : 'boulder: glancing blow';
     } else if (p.kind === 'fire') {
-      // Greek fire ignites the garrison. Only effective if the shot enters the
-      // wall band (i.e. the projectile got there at all).
       if (p.x >= WALL_X - 8 && p.x <= WALL_X + WALL_W + 8) {
         state.garrison -= FIRE_DAMAGE;
         state.lastResult = 'Greek fire: -' + FIRE_DAMAGE + ' garrison';
-      } else {
-        state.lastResult = 'Greek fire: fell short';
-      }
+      } else state.lastResult = 'Greek fire: fell short';
     } else if (p.kind === 'disease') {
       if (p.x >= WALL_X - 8 && p.x <= WALL_X + WALL_W + 8) {
         const dmg = DISEASE_DAMAGE_BY_INDEX[p.shotIndex] ?? 10;
         state.garrison -= dmg;
         state.lastResult = 'disease: -' + dmg + ' garrison';
-      } else {
-        state.lastResult = 'disease: fell short';
-      }
+      } else state.lastResult = 'disease: fell short';
     }
   }
-
   function endShot() {
     state.shotsFired++;
     state.projectile = null;
-    // Win conditions.
     if (state.garrison <= 0) { state.gameOver = true; state.won = true; }
     else if (!wallStanding()) { state.gameOver = true; state.won = true; }
-    else if (state.shotsFired >= MAX_SHOTS) { state.gameOver = true; state.won = false; }
+    else if (state.shotsFired >= SIDE_MAX_SHOTS) { state.gameOver = true; state.won = false; }
     refreshControls();
-    refreshHud();
   }
 
-  // ---- Step (pure simulation, view-agnostic) ------------------------------
+  // ---- Step -------------------------------------------------------------
   function step(dt) {
     if (!state.projectile) return;
     const p = state.projectile;
     p.vy += GRAVITY * dt;
     p.x  += p.vx * dt;
     p.y  += p.vy * dt;
-
-    // Collision with wall band (test in mid-band).
     if (p.x >= WALL_X && p.x <= WALL_X + WALL_W &&
         p.y >= WALL_TOP_Y && p.y <= WALL_BASE_Y) {
       const hit = brickAt(p.x, p.y);
@@ -372,55 +369,44 @@ export function mount(rootEl) {
         return;
       }
     }
-    // Past the wall, off canvas, or ground.
     if (p.y >= GROUND_Y || p.x > W + 20 || p.x < -20) {
-      applyImpact(p);   // may still credit fire/disease if it cleared
+      applyImpact(p);
       endShot();
       return;
     }
   }
 
-  function ammoColor(kind) {
-    if (kind === 'boulder') return T.fgMuted;
-    if (kind === 'fire')    return T.amber;
-    if (kind === 'disease') return T.teal;
-    return T.fg;
-  }
-
-  // ---- Side-profile render (the original view) ----------------------------
-  function drawSide(ctx) {
-    // Sky gradient (deep dusk).
+  // ---- Draw -------------------------------------------------------------
+  function draw() {
+    // Sky.
     const sky = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
     sky.addColorStop(0, '#1a1d24');
     sky.addColorStop(1, '#2a2128');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, W, H);
-
-    // Distant ground plane (flat amber haze under the wall).
     ctx.fillStyle = '#1f1c19';
     ctx.fillRect(0, WALL_BASE_Y, W, GROUND_Y - WALL_BASE_Y);
 
-    // Wall: bricks.
-    for (let r = 0; r < WALL_ROWS; r++) {
-      for (let c = 0; c < WALL_COLS; c++) {
+    // Bricks.
+    for (let r = 0; r < SIDE_ROWS; r++) {
+      for (let c = 0; c < SIDE_COLS; c++) {
         if (!state.bricks[r][c]) continue;
-        const x = WALL_X + c * BRICK_W;
-        const y = WALL_TOP_Y + r * BRICK_H;
+        const x = WALL_X + c * SIDE_BRICK_W;
+        const y = WALL_TOP_Y + r * SIDE_BRICK_H;
         ctx.fillStyle = (r + c) % 2 ? '#3a342c' : '#4a4135';
-        ctx.fillRect(x + 1, y + 1, BRICK_W - 2, BRICK_H - 2);
+        ctx.fillRect(x + 1, y + 1, SIDE_BRICK_W - 2, SIDE_BRICK_H - 2);
         ctx.strokeStyle = '#15171a';
         ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 0.5, BRICK_W - 1, BRICK_H - 1);
+        ctx.strokeRect(x + 0.5, y + 0.5, SIDE_BRICK_W - 1, SIDE_BRICK_H - 1);
       }
     }
-    // Wall base line.
     ctx.strokeStyle = T.rule;
     ctx.beginPath();
     ctx.moveTo(WALL_X - 10, WALL_BASE_Y + 0.5);
     ctx.lineTo(WALL_X + WALL_W + 10, WALL_BASE_Y + 0.5);
     ctx.stroke();
 
-    // Garrison badge above the wall.
+    // Garrison badge.
     const badgeX = WALL_X + WALL_W - 70;
     const badgeY = WALL_TOP_Y - 28;
     ctx.fillStyle = T.bgElev;
@@ -433,16 +419,15 @@ export function mount(rootEl) {
     ctx.textAlign = 'center';
     ctx.fillText('GARR ' + Math.max(0, state.garrison), badgeX + 32, badgeY + 10);
 
-    // Foreground ground band (catapult earth).
+    // Foreground ground.
     ctx.fillStyle = T.bg;
     ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
     ctx.strokeStyle = T.rule;
     ctx.beginPath();
-    ctx.moveTo(0, GROUND_Y + 0.5);
-    ctx.lineTo(W, GROUND_Y + 0.5);
+    ctx.moveTo(0, GROUND_Y + 0.5); ctx.lineTo(W, GROUND_Y + 0.5);
     ctx.stroke();
 
-    // Catapult base (wedge + wheels).
+    // Catapult base.
     ctx.fillStyle = '#3a2f24';
     ctx.beginPath();
     ctx.moveTo(PIVOT_X - 38, GROUND_Y);
@@ -455,7 +440,7 @@ export function mount(rootEl) {
     ctx.beginPath(); ctx.arc(PIVOT_X - 26, GROUND_Y - 4, 7, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(PIVOT_X + 14, GROUND_Y - 4, 7, 0, Math.PI * 2); ctx.fill();
 
-    // Catapult arm.
+    // Arm.
     const ax = PIVOT_X + Math.cos(state.arm.angle) * ARM_LEN;
     const ay = PIVOT_Y + Math.sin(state.arm.angle) * ARM_LEN;
     ctx.strokeStyle = '#a88457';
@@ -465,15 +450,14 @@ export function mount(rootEl) {
     ctx.moveTo(PIVOT_X, PIVOT_Y);
     ctx.lineTo(ax, ay);
     ctx.stroke();
-    // Sling cup at tip.
     ctx.fillStyle = T.bgElev;
     ctx.beginPath(); ctx.arc(ax, ay, 5, 0, Math.PI * 2); ctx.fill();
     if (!state.projectile && !state.gameOver) {
-      ctx.fillStyle = ammoColor(state.ammo);
+      ctx.fillStyle = ammoColor(state.ammo, T);
       ctx.beginPath(); ctx.arc(ax, ay, 4, 0, Math.PI * 2); ctx.fill();
     }
 
-    // Pull-back power bar lower-left.
+    // Power bar.
     const power = Math.min(1, state.arm.pullMs / PULL_FULL_MS);
     if (state.arm.pulling || power > 0.001) {
       const barX = 16, barY = H - 18, barW = 140, barH = 8;
@@ -485,15 +469,14 @@ export function mount(rootEl) {
       ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
       ctx.fillStyle = T.fgMuted;
       ctx.font = '10px ui-monospace, Menlo, Consolas, monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
       ctx.fillText('PULL', barX, barY - 4);
     }
 
     // Projectile.
     if (state.projectile) {
       const p = state.projectile;
-      ctx.fillStyle = ammoColor(p.kind);
+      ctx.fillStyle = ammoColor(p.kind, T);
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.kind === 'boulder' ? 6 : 5, 0, Math.PI * 2);
       ctx.fill();
@@ -507,12 +490,27 @@ export function mount(rootEl) {
       }
     }
 
+    // Status line (top-left).
+    ctx.fillStyle = T.fgMuted;
+    ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('shots ' + (SIDE_MAX_SHOTS - state.shotsFired) + '/' + SIDE_MAX_SHOTS +
+                 '    garr ' + Math.max(0, state.garrison), 10, 8);
+    if (state.lastResult && !state.gameOver) {
+      ctx.fillStyle = T.amber;
+      ctx.fillText(state.lastResult, 10, 22);
+    } else if (!state.gameOver) {
+      ctx.fillStyle = state.breached ? T.teal : T.fgMuted;
+      ctx.fillText(state.breached ? 'breach open' : 'breach the wall', 10, 22);
+    }
+
     // Frame.
     ctx.strokeStyle = T.amber;
     ctx.lineWidth = 1;
     ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
 
-    // Idle prompt.
+    // Idle prompt + game over.
     if (!state.projectile && !state.gameOver && !state.arm.pulling) {
       ctx.fillStyle = T.fgMuted;
       ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
@@ -532,18 +530,436 @@ export function mount(rootEl) {
     }
   }
 
-  // ---- Over-the-shoulder render -------------------------------------------
-  // Conceptual front view: viewer stands BEHIND the catapult. The arm rises
-  // in the lower foreground; the wall sits at the horizon ~halfway up.
-  // Foreshortening is faked: the arm is drawn as a thick stroke whose visible
-  // length scales with the cosine of its world angle relative to the viewer
-  // axis, so it appears "shorter" when extended toward/away from camera.
-  // The projectile's world-x (distance toward the wall) is mapped to a depth
-  // ratio used to (a) move the dot toward the vanishing point and (b) shrink
-  // its radius. Bricks read as a small grid at the horizon.
-  function drawFront(ctx) {
-    // Background sky/ground split.
-    const HORIZON = 230;       // y-line where wall sits in this view
+  // ---- Boot -------------------------------------------------------------
+  state = freshState();
+  refreshControls();
+
+  return {
+    step,
+    draw,
+    cleanup: () => {
+      cleanupTension();
+      btnBoulder.removeEventListener('click', onBoulder);
+      btnFire.removeEventListener('click', onFire);
+      btnDisease.removeEventListener('click', onDisease);
+      btnReset.removeEventListener('click', onReset);
+    },
+  };
+}
+
+// =========================================================================
+// FRONT GAME — Saxon castle, column-knock
+// =========================================================================
+// Visual: long beam arm with growing boulder while pulling back, distant castle
+// silhouette with crenellated towers, a brick grid on the gatehouse face.
+//
+// Rules (independent of side game):
+//   6 shots, boulder only. Hit a column 3 times to topple it = VICTORY.
+//   6 shots without a column reaching 3 hits = DEFEAT.
+function createFrontGame(refs, T) {
+  const { canvas, ctx, controls } = refs;
+
+  // ---- Layout constants (front view) -----------------------------------
+  const HORIZON      = 230;
+  const VPX          = W / 2;
+
+  // Castle/gatehouse face — where the brick grid lives.
+  const F_WALL_W     = W * 0.42;
+  const F_WALL_X     = VPX - F_WALL_W / 2;
+  const F_BRICK_W    = F_WALL_W / FRONT_COLS;
+  const F_BRICK_H    = 16;
+  const F_WALL_TOP   = HORIZON - F_BRICK_H * FRONT_ROWS;
+  const F_WALL_BASE  = HORIZON;
+
+  // Catapult (foreground, viewed from behind).
+  const BASE_CX      = W / 2;
+  const BASE_TOP_Y   = GROUND_Y - 26;     // top of wagon-bed
+  const BASE_HALF_T  = 24;                // top half-width
+  const BASE_HALF_B  = 44;                // bottom half-width
+
+  // Beam arm — per spec: ~50% of canvas height (long, dominant).
+  const BEAM_LEN     = 200;
+  const BEAM_WIDTH   = 5;
+  // Rest pose: tilted forward (away from camera, toward the wall).
+  // Up = -y. Forward = -y biased toward HORIZON. Use angle from vertical.
+  // 0 = straight up. Positive = tilted FORWARD (toward wall = up-screen).
+  // Negative = tilted BACKWARD (toward camera = leans down-screen toward viewer).
+  // Rest: +0.35 rad ≈ 20° forward.
+  const BEAM_REST_RAD = 0.35;
+  // Max pullback: arm rotates BACKWARD past vertical, toward the viewer.
+  // -0.7 rad ≈ -40° from vertical (leaning back toward camera).
+  const BEAM_PULL_RAD = 1.05;             // total swing from rest at full pull
+
+  // Boulder size animation at the bucket (per spec: 5–6 → ~22).
+  const BOULDER_R_REST = 6;
+  const BOULDER_R_FULL = 22;
+
+  // ---- Controls ---------------------------------------------------------
+  const btnReset = mkButton('New siege', T);
+  btnReset.style.borderColor = T.teal;
+  controls.append(btnReset);
+
+  // ---- State ------------------------------------------------------------
+  let state;
+  function freshState() {
+    return {
+      shotsFired: 0,
+      // Column hit counters; index 0 = leftmost column.
+      colHits:    new Array(FRONT_COLS).fill(0),
+      // Per-cell fallen flag; bricks[r][c] = true if standing.
+      bricks:     Array.from({ length: FRONT_ROWS }, () =>
+        Array.from({ length: FRONT_COLS }, () => true)),
+      arm:        { angle: BEAM_REST_RAD, pulling: false, pullMs: 0 },
+      // Projectile in flight; world coords for collision parity with side game.
+      projectile: null,
+      // Launch tracking — for the FRONT view we need the boulder's launch size
+      // to feed into the in-flight depth shrink.
+      launchR:    BOULDER_R_REST,
+      // Most recent shot's target column (for HUD pulse + audio cue placeholder).
+      lastCol:    -1,
+      lastResult: '',
+      gameOver:   false,
+      won:        false,
+      wonCol:     -1,
+    };
+  }
+
+  function refreshControls() {
+    btnReset.style.opacity = '1';
+  }
+
+  const onReset = () => { state = freshState(); refreshControls(); };
+  btnReset.addEventListener('click', onReset);
+
+  // ---- Pull-back gesture — bound to THIS canvas only -------------------
+  const cleanupTension = holdTension(canvas, {
+    onStart: () => {
+      if (state.gameOver || state.projectile) return;
+      state.arm.pulling = true;
+      state.arm.pullMs  = 0;
+      state.arm.angle   = BEAM_REST_RAD;
+    },
+    onUpdate: (ms) => {
+      if (!state.arm.pulling) return;
+      const t = Math.min(1, ms / PULL_FULL_MS);
+      state.arm.pullMs = ms;
+      // Rotate BACKWARD past vertical toward the viewer.
+      state.arm.angle  = BEAM_REST_RAD - BEAM_PULL_RAD * t;
+    },
+    onRelease: (ms) => {
+      if (!state.arm.pulling) return;
+      state.arm.pulling = false;
+      if (state.gameOver || state.projectile) {
+        state.arm.angle = BEAM_REST_RAD;
+        return;
+      }
+      const power = Math.min(1, ms / PULL_FULL_MS);
+      const v     = V_MIN + (V_MAX - V_MIN) * power;
+      // Boulder launch size = max-pullback size (per spec).
+      state.launchR = BOULDER_R_REST + (BOULDER_R_FULL - BOULDER_R_REST) * power;
+      fire(v);
+      state.arm.angle = BEAM_REST_RAD;
+    },
+  });
+
+  function fire(v) {
+    // Use the side-view coord system for trajectory math (gravity, parabola).
+    // It doesn't have to "match" the front view geometrically — the front view
+    // projects world-x to screen-x via the wall band.
+    const launchX = PIVOT_X + Math.cos(ARM_REST_ANG) * ARM_LEN;
+    const launchY = PIVOT_Y + Math.sin(ARM_REST_ANG) * ARM_LEN;
+    const vx =  v * Math.cos(LAUNCH_ANGLE);
+    const vy = -v * Math.sin(LAUNCH_ANGLE);
+    state.projectile = {
+      x: launchX, y: launchY, vx, vy,
+      kind: 'boulder',
+      shotIndex: state.shotsFired,
+    };
+    state.lastResult = '';
+  }
+
+  // ---- Collision (column-grain) ----------------------------------------
+  // We don't need brick-row detection for win logic — only column.
+  // A boulder is "in the wall band" when its world-x crosses WALL_X..WALL_X+WALL_W
+  // AND its world-y is within the wall's vertical band.
+  function brickColAt(x) {
+    if (x < WALL_X || x >= WALL_X + WALL_W) return -1;
+    // Map world-x to front-game column (8 cols, not 12).
+    return Math.floor(((x - WALL_X) / WALL_W) * FRONT_COLS);
+  }
+
+  function applyImpact(p) {
+    const col = brickColAt(p.x);
+    if (col < 0 || col >= FRONT_COLS) {
+      state.lastResult = 'fell short';
+      state.lastCol = -1;
+      return;
+    }
+    state.colHits[col] = Math.min(HITS_TO_FELL, state.colHits[col] + 1);
+    state.lastCol = col;
+    // Visually drop bricks from the top of the column down as hits accumulate.
+    // Hit 1 → top row (r=0) falls. Hit 2 → middle rows. Hit 3 → all fallen.
+    const hits = state.colHits[col];
+    if (hits === 1) {
+      state.bricks[0][col] = false;
+    } else if (hits === 2) {
+      // Middle two rows (1 and 2 of 4).
+      state.bricks[1][col] = false;
+      state.bricks[2][col] = false;
+    } else if (hits >= HITS_TO_FELL) {
+      for (let r = 0; r < FRONT_ROWS; r++) state.bricks[r][col] = false;
+    }
+    state.lastResult = 'column ' + (col + 1) + ': ' + hits + '/' + HITS_TO_FELL;
+  }
+
+  function endShot() {
+    state.shotsFired++;
+    state.projectile = null;
+    // Check win.
+    for (let c = 0; c < FRONT_COLS; c++) {
+      if (state.colHits[c] >= HITS_TO_FELL) {
+        state.gameOver = true;
+        state.won      = true;
+        state.wonCol   = c;
+        return;
+      }
+    }
+    if (state.shotsFired >= FRONT_MAX_SHOTS) {
+      state.gameOver = true;
+      state.won      = false;
+    }
+  }
+
+  // ---- Step ------------------------------------------------------------
+  function step(dt) {
+    if (!state.projectile) return;
+    const p = state.projectile;
+    p.vy += GRAVITY * dt;
+    p.x  += p.vx * dt;
+    p.y  += p.vy * dt;
+    if (p.x >= WALL_X && p.x <= WALL_X + WALL_W &&
+        p.y >= WALL_TOP_Y && p.y <= WALL_BASE_Y) {
+      applyImpact(p);
+      endShot();
+      return;
+    }
+    if (p.y >= GROUND_Y || p.x > W + 20 || p.x < -20) {
+      applyImpact(p);
+      endShot();
+      return;
+    }
+  }
+
+  // ---- Draw helpers ----------------------------------------------------
+  function drawCastleSilhouette(c) {
+    // Stone-gray silhouette behind the wall — towers + central gatehouse.
+    // Use fg-muted at low alpha so it reads as "distant".
+    c.save();
+    c.globalAlpha = 0.55;
+    c.fillStyle = T.fgMuted;
+
+    // Ground line for the castle (sits ON the horizon).
+    const baseY = HORIZON;
+    const groundLineY = HORIZON + 2;
+
+    // Three round towers + central gatehouse. Tower dims:
+    const towerW = 38;
+    const towerH = 78;
+    const gateW  = 88;
+    const gateH  = 92;
+    const merlonH = 6;
+
+    // Tower positions (x = left edge): two flanking, one mid-left/right.
+    // Layout: [L tower] [gap] [gatehouse centered] [gap] [R tower]
+    const gateX = VPX - gateW / 2;
+    const gateY = baseY - gateH;
+    const lTowerX = gateX - 80;
+    const rTowerX = gateX + gateW + 80 - towerW;
+    const lTowerY = baseY - towerH;
+    const rTowerY = baseY - towerH;
+
+    // Outer wall (low curtain) connecting the towers.
+    c.fillRect(lTowerX - 40, baseY - 28, (rTowerX + towerW + 40) - (lTowerX - 40), 28);
+
+    // Towers — simple rectangle bodies.
+    c.fillRect(lTowerX, lTowerY, towerW, towerH);
+    c.fillRect(rTowerX, rTowerY, towerW, towerH);
+
+    // Gatehouse — taller central block.
+    c.fillRect(gateX, gateY, gateW, gateH);
+
+    // Crenellations: small notch pattern on top of each silhouette element.
+    const drawCrenellations = (x, y, w) => {
+      // 5px merlons, 3px gaps.
+      const mw = 6, gw = 4;
+      const total = mw + gw;
+      const count = Math.floor(w / total);
+      // Pull merlons UP from y by merlonH; they're already part of fill, so
+      // we need to CUT gaps — draw bg-elev rectangles over the top.
+      c.fillStyle = T.bg;
+      for (let i = 0; i < count; i++) {
+        const mx = x + i * total + mw;
+        c.fillRect(mx, y - merlonH, gw, merlonH + 1);
+      }
+      c.fillStyle = T.fgMuted;
+    };
+    // Need merlons drawn AS extruded shapes above the body. Simpler: extend
+    // the body up by merlonH, then carve gaps. Already filled, so just carve.
+    // Extend tops with merlons:
+    c.fillRect(lTowerX, lTowerY - merlonH, towerW, merlonH);
+    c.fillRect(rTowerX, rTowerY - merlonH, towerW, merlonH);
+    c.fillRect(gateX,   gateY   - merlonH, gateW,   merlonH);
+    drawCrenellations(lTowerX, lTowerY,        towerW);
+    drawCrenellations(rTowerX, rTowerY,        towerW);
+    drawCrenellations(gateX,   gateY,          gateW);
+    // Curtain wall crenellations.
+    drawCrenellations(lTowerX - 40, baseY - 28, (rTowerX + towerW + 40) - (lTowerX - 40));
+
+    // Gate arch (subtle bg-colored notch at the gatehouse base).
+    c.fillStyle = T.bg;
+    const archW = 18, archH = 28;
+    const archX = VPX - archW / 2;
+    const archY = baseY - archH;
+    c.fillRect(archX, archY, archW, archH);
+    // Arch top — a half-circle.
+    c.beginPath();
+    c.arc(VPX, archY, archW / 2, Math.PI, 0);
+    c.fill();
+
+    // Flag poles on each tower.
+    c.strokeStyle = T.fgMuted;
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(lTowerX + towerW / 2, lTowerY - merlonH);
+    c.lineTo(lTowerX + towerW / 2, lTowerY - merlonH - 14);
+    c.moveTo(rTowerX + towerW / 2, rTowerY - merlonH);
+    c.lineTo(rTowerX + towerW / 2, rTowerY - merlonH - 14);
+    c.moveTo(VPX, gateY - merlonH);
+    c.lineTo(VPX, gateY - merlonH - 18);
+    c.stroke();
+    // Pennants.
+    c.fillStyle = T.blood;
+    c.globalAlpha = 0.7;
+    const drawPennant = (px, py) => {
+      c.beginPath();
+      c.moveTo(px, py); c.lineTo(px + 9, py + 2); c.lineTo(px, py + 5);
+      c.closePath(); c.fill();
+    };
+    drawPennant(lTowerX + towerW / 2, lTowerY - merlonH - 14);
+    drawPennant(rTowerX + towerW / 2, rTowerY - merlonH - 14);
+    drawPennant(VPX,                  gateY   - merlonH - 18);
+
+    // Ground line under castle.
+    c.globalAlpha = 1;
+    c.strokeStyle = T.rule;
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(0, groundLineY + 0.5);
+    c.lineTo(W, groundLineY + 0.5);
+    c.stroke();
+    c.restore();
+  }
+
+  function drawBeamArm(c, pivotX, pivotY, angleFromVert, beamLen, boulderR) {
+    // OTS framing: camera sits directly behind the catapult. The beam swings
+    // in the depth plane (forward = toward wall; back = toward camera).
+    //   angleFromVert > 0 → tilted FORWARD (toward wall, away from camera)
+    //   angleFromVert = 0 → straight up
+    //   angleFromVert < 0 → tilted BACKWARD (toward viewer, over the gunner)
+    //
+    // Fake foreshortening on 2D canvas: rest pose stands the beam tall above
+    // the catapult; pulling back rotates the tip DOWN-screen toward the
+    // foreground so it visibly "leans back over the camera". Forward lean at
+    // rest leaves the tip at roughly the natural up-projection.
+    const dy = -beamLen * Math.cos(angleFromVert);            // vertical component
+    const BACK_BIAS = 0.55;                                   // amount of backward swing applied as screen-y drop
+    const backLean = Math.max(0, -angleFromVert);             // 0 at rest, grows as we wind back
+    const tipX = pivotX;
+    const tipY = pivotY + dy + backLean * beamLen * BACK_BIAS;
+
+    // Beam — single thick stroke.
+    c.strokeStyle = '#a88457';
+    c.lineWidth = BEAM_WIDTH;
+    c.lineCap = 'round';
+    c.beginPath();
+    c.moveTo(pivotX, pivotY);
+    c.lineTo(tipX, tipY);
+    c.stroke();
+
+    // Bucket / sling at the tip — a small open cup drawn as a half-circle
+    // opening UPWARD (so the boulder visibly sits IN it). Since the beam in
+    // this OTS view stays close to vertical at all times, an axis-aligned
+    // upward-opening U-shape reads cleanly across the whole pullback range.
+    const cupR = Math.max(7, boulderR * 0.85);
+    c.strokeStyle = T.fgMuted;
+    c.lineWidth = 2;
+    c.beginPath();
+    // Canvas angles: 0=right, PI=left, sweep clockwise default.
+    // Arc 0 → PI clockwise goes through PI/2 (down) = lower half = U-shape.
+    c.arc(tipX, tipY, cupR, 0, Math.PI, false);
+    c.stroke();
+
+    // Boulder sitting in the cup.
+    c.fillStyle = T.fg;
+    c.beginPath();
+    c.arc(tipX, tipY, boulderR, 0, Math.PI * 2);
+    c.fill();
+    // Subtle outline so it reads as a stone, not a fill.
+    c.strokeStyle = 'rgba(0,0,0,0.5)';
+    c.lineWidth = 1;
+    c.stroke();
+    return { tipX, tipY };
+  }
+
+  function drawScaleFigures(c) {
+    // Two tiny silhouettes flanking the catapult base. Pure dots/sticks.
+    c.fillStyle = T.fgMuted;
+    c.strokeStyle = T.fgMuted;
+    c.lineWidth = 1;
+    const drawFigure = (x, y) => {
+      // Head dot.
+      c.beginPath();
+      c.arc(x, y - 6, 1.6, 0, Math.PI * 2);
+      c.fill();
+      // Body line.
+      c.beginPath();
+      c.moveTo(x, y - 4);
+      c.lineTo(x, y);
+      c.stroke();
+    };
+    drawFigure(BASE_CX - BASE_HALF_B - 14, GROUND_Y - 1);
+    drawFigure(BASE_CX + BASE_HALF_B + 14, GROUND_Y - 1);
+  }
+
+  function drawHitDots(c) {
+    // Row of dot-clusters below the canvas wall band, one cluster per column.
+    // 1-2 hits = amber dot(s); 3 hits = blood dot(s) (column down).
+    const dotR = 2.5;
+    const rowY = F_WALL_BASE + 10;
+    for (let col = 0; col < FRONT_COLS; col++) {
+      const cx = F_WALL_X + col * F_BRICK_W + F_BRICK_W / 2;
+      const hits = state.colHits[col];
+      // Always draw 3 slots (filled or empty) for clarity.
+      for (let slot = 0; slot < HITS_TO_FELL; slot++) {
+        const dx = cx + (slot - 1) * 6;
+        const filled = slot < hits;
+        if (!filled) {
+          c.fillStyle = T.rule;
+        } else if (hits >= HITS_TO_FELL) {
+          c.fillStyle = T.blood;
+        } else {
+          c.fillStyle = T.amber;
+        }
+        c.beginPath();
+        c.arc(dx, rowY, dotR, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+  }
+
+  // ---- Draw ------------------------------------------------------------
+  function draw() {
+    // Sky.
     const sky = ctx.createLinearGradient(0, 0, 0, HORIZON);
     sky.addColorStop(0, '#1a1d24');
     sky.addColorStop(1, '#2a2128');
@@ -552,19 +968,16 @@ export function mount(rootEl) {
     ctx.fillStyle = '#1f1c19';
     ctx.fillRect(0, HORIZON, W, GROUND_Y - HORIZON);
 
-    // Linear-perspective ground: two rails converging to a vanishing point
-    // centered on the wall. Plus a few cross-ties to read as recession.
-    const VPX = W / 2, VPY = HORIZON;
+    // Perspective rails to vanishing point on castle.
     ctx.strokeStyle = T.rule;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(40, GROUND_Y);  ctx.lineTo(VPX, VPY);
-    ctx.moveTo(W - 40, GROUND_Y); ctx.lineTo(VPX, VPY);
+    ctx.moveTo(40, GROUND_Y); ctx.lineTo(VPX, HORIZON);
+    ctx.moveTo(W - 40, GROUND_Y); ctx.lineTo(VPX, HORIZON);
     ctx.stroke();
-    // Cross-ties (depth markers).
     for (const t of [0.25, 0.5, 0.75]) {
-      const y = GROUND_Y + (VPY - GROUND_Y) * t;
-      const left  = 40 + ((VPX - 40)       * t);
+      const y = GROUND_Y + (HORIZON - GROUND_Y) * t;
+      const left  = 40 + ((VPX - 40) * t);
       const right = (W - 40) + ((VPX - (W - 40)) * t);
       ctx.strokeStyle = 'rgba(138,130,117,' + (0.18 - t * 0.12).toFixed(2) + ')';
       ctx.beginPath();
@@ -572,7 +985,33 @@ export function mount(rootEl) {
       ctx.stroke();
     }
 
-    // Foreground ground band (just below the catapult).
+    // Castle silhouette (background).
+    drawCastleSilhouette(ctx);
+
+    // Bricks on the gatehouse face — the WALL we're attacking.
+    for (let r = 0; r < FRONT_ROWS; r++) {
+      for (let c = 0; c < FRONT_COLS; c++) {
+        if (!state.bricks[r][c]) continue;
+        const x = F_WALL_X + c * F_BRICK_W;
+        const y = F_WALL_TOP + r * F_BRICK_H;
+        ctx.fillStyle = (r + c) % 2 ? '#3a342c' : '#4a4135';
+        ctx.fillRect(x + 0.5, y + 0.5, F_BRICK_W - 1, F_BRICK_H - 1);
+        ctx.strokeStyle = '#15171a';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, F_BRICK_W - 1, F_BRICK_H - 1);
+      }
+    }
+    // Wall base line.
+    ctx.strokeStyle = T.rule;
+    ctx.beginPath();
+    ctx.moveTo(F_WALL_X - 6, F_WALL_BASE + 0.5);
+    ctx.lineTo(F_WALL_X + F_WALL_W + 6, F_WALL_BASE + 0.5);
+    ctx.stroke();
+
+    // Hit-dot HUD beneath the wall.
+    drawHitDots(ctx);
+
+    // Foreground ground band.
     ctx.fillStyle = T.bg;
     ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
     ctx.strokeStyle = T.rule;
@@ -580,174 +1019,115 @@ export function mount(rootEl) {
     ctx.moveTo(0, GROUND_Y + 0.5); ctx.lineTo(W, GROUND_Y + 0.5);
     ctx.stroke();
 
-    // --- The wall (distant) ------------------------------------------------
-    // Wall band is 35% of canvas width, centered on the vanishing point.
-    const fwallW = W * 0.35;
-    const fwallX = VPX - fwallW / 2;
-    const fbrickW = fwallW / WALL_COLS;
-    const fbrickH = 14;                  // shorter than side view: distance compression
-    const fwallTop = HORIZON - fbrickH * WALL_ROWS;
-    for (let r = 0; r < WALL_ROWS; r++) {
-      for (let c = 0; c < WALL_COLS; c++) {
-        if (!state.bricks[r][c]) continue;
-        const x = fwallX + c * fbrickW;
-        const y = fwallTop + r * fbrickH;
-        ctx.fillStyle = (r + c) % 2 ? '#3a342c' : '#4a4135';
-        ctx.fillRect(x + 0.5, y + 0.5, fbrickW - 1, fbrickH - 1);
-        ctx.strokeStyle = '#15171a';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 0.5, fbrickW - 1, fbrickH - 1);
-      }
-    }
-    // Wall base line.
-    ctx.strokeStyle = T.rule;
-    ctx.beginPath();
-    ctx.moveTo(fwallX - 6, HORIZON + 0.5);
-    ctx.lineTo(fwallX + fwallW + 6, HORIZON + 0.5);
-    ctx.stroke();
-
-    // Garrison badge above the wall.
-    const gbX = fwallX + fwallW - 64;
-    const gbY = fwallTop - 22;
-    ctx.fillStyle = T.bgElev;
-    ctx.strokeStyle = T.blood;
-    ctx.fillRect(gbX, gbY, 60, 18);
-    ctx.strokeRect(gbX + 0.5, gbY + 0.5, 59, 17);
-    ctx.fillStyle = T.fg;
-    ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'center';
-    ctx.fillText('GARR ' + Math.max(0, state.garrison), gbX + 30, gbY + 9);
-
-    // --- The catapult, from behind ----------------------------------------
-    // Base: a trapezoidal silhouette in the lower foreground, viewed from
-    // behind. Wider at the front (closer to viewer). Centered horizontally.
-    const baseCX  = W / 2;
-    const baseTop = GROUND_Y - 38;
-    const baseHalfTop = 30;
-    const baseHalfBot = 60;
+    // Small wheeled wagon base (trapezoidal body + two wheels).
     ctx.fillStyle = '#3a2f24';
     ctx.beginPath();
-    ctx.moveTo(baseCX - baseHalfTop, baseTop);
-    ctx.lineTo(baseCX + baseHalfTop, baseTop);
-    ctx.lineTo(baseCX + baseHalfBot, GROUND_Y);
-    ctx.lineTo(baseCX - baseHalfBot, GROUND_Y);
+    ctx.moveTo(BASE_CX - BASE_HALF_T, BASE_TOP_Y);
+    ctx.lineTo(BASE_CX + BASE_HALF_T, BASE_TOP_Y);
+    ctx.lineTo(BASE_CX + BASE_HALF_B, GROUND_Y);
+    ctx.lineTo(BASE_CX - BASE_HALF_B, GROUND_Y);
     ctx.closePath();
     ctx.fill();
-    // Wheels just visible on either side (axle ends).
+    // Wheels (visible circles at base edges).
     ctx.fillStyle = T.bgElev;
-    ctx.beginPath(); ctx.arc(baseCX - baseHalfBot + 4, GROUND_Y - 6, 7, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(baseCX + baseHalfBot - 4, GROUND_Y - 6, 7, 0, Math.PI * 2); ctx.fill();
-    // Cross-beam at the top of the base (the axle the arm pivots on).
-    ctx.strokeStyle = '#5a4a38';
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(baseCX - baseHalfTop - 4, baseTop);
-    ctx.lineTo(baseCX + baseHalfTop + 4, baseTop);
-    ctx.stroke();
+    ctx.strokeStyle = T.fgMuted;
+    ctx.lineWidth = 1;
+    const wheelR = 9;
+    const wheelLX = BASE_CX - BASE_HALF_B + 2;
+    const wheelRX = BASE_CX + BASE_HALF_B - 2;
+    const wheelY  = GROUND_Y - 2;
+    ctx.beginPath(); ctx.arc(wheelLX, wheelY, wheelR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(wheelRX, wheelY, wheelR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    // Wheel hubs.
+    ctx.fillStyle = T.fgMuted;
+    ctx.beginPath(); ctx.arc(wheelLX, wheelY, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(wheelRX, wheelY, 2, 0, Math.PI * 2); ctx.fill();
 
-    // --- The arm (foreshortened) ------------------------------------------
-    // World arm angle (in side-view space) is in [ARM_REST_ANG - ARM_PULL_MAX,
-    // ARM_REST_ANG]. Map this to a foreshortening factor:
-    //   pullT = 0 (rest, arm tilted forward toward the wall — away from camera)
-    //   pullT = 1 (fully wound back, arm tilted toward camera)
-    // We render the arm as a vertical-ish line rising from the pivot. Its
-    // visible length scales with the projection: shorter when pointed away,
-    // longer when pulled back toward us. We also bias the tip slightly down
-    // (toward camera) when pulled back, to read as "leaning at us".
-    const pullT = (ARM_REST_ANG - state.arm.angle) / ARM_PULL_MAX; // 0..1
-    const ARM_BASE_LEN = 110;             // visible length at rest
-    const ARM_REACH    = 40;              // extra length when pulled fully back
-    const armVisLen = ARM_BASE_LEN + ARM_REACH * pullT;
-    // When pulled back, tip leans toward camera (down-screen); at rest, leans
-    // toward the wall (up-screen, toward horizon).
-    const armLean   = (pullT - 0.4) * 28; // px, signed
-    const armTipX = baseCX;
-    const armTipY = baseTop - armVisLen + Math.max(0, armLean);
-    ctx.strokeStyle = '#a88457';
-    ctx.lineWidth = 8 + 4 * pullT;        // arm "swells" toward us as it pulls back
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(baseCX, baseTop);
-    ctx.lineTo(armTipX, armTipY);
-    ctx.stroke();
-    // Sling cup at tip.
-    ctx.fillStyle = T.bgElev;
-    ctx.beginPath(); ctx.arc(armTipX, armTipY, 6 + 2 * pullT, 0, Math.PI * 2); ctx.fill();
-    if (!state.projectile && !state.gameOver) {
-      ctx.fillStyle = ammoColor(state.ammo);
-      ctx.beginPath(); ctx.arc(armTipX, armTipY, 4 + 2 * pullT, 0, Math.PI * 2); ctx.fill();
+    // Scale figures (the human-scale touch from the screenshots).
+    drawScaleFigures(ctx);
+
+    // Pull-tension power factor (0..1).
+    const pullT = Math.min(1, state.arm.pullMs / PULL_FULL_MS);
+
+    // Optional faint tension arc behind the arm during wind-up.
+    if (state.arm.pulling && pullT > 0.05) {
+      ctx.save();
+      ctx.strokeStyle = T.amber;
+      ctx.globalAlpha = 0.18 + 0.22 * pullT;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      // Arc behind the pivot, opening upward.
+      ctx.arc(BASE_CX, BASE_TOP_Y, BEAM_LEN * 0.55, Math.PI + 0.2, Math.PI * 2 - 0.2);
+      ctx.stroke();
+      ctx.restore();
     }
 
-    // --- The projectile in flight, foreshortened --------------------------
+    // Beam arm + boulder sitting in bucket (unless in flight or over).
+    let armTipX = BASE_CX;
+    let armTipY = BASE_TOP_Y - BEAM_LEN;
+    if (!state.projectile && !state.gameOver) {
+      const boulderR = BOULDER_R_REST + (BOULDER_R_FULL - BOULDER_R_REST) * pullT;
+      const tip = drawBeamArm(ctx, BASE_CX, BASE_TOP_Y, state.arm.angle, BEAM_LEN, boulderR);
+      armTipX = tip.tipX; armTipY = tip.tipY;
+    } else {
+      // Arm at rest, empty bucket.
+      const tip = drawBeamArm(ctx, BASE_CX, BASE_TOP_Y, BEAM_REST_RAD, BEAM_LEN, 0);
+      armTipX = tip.tipX; armTipY = tip.tipY;
+    }
+
+    // --- Projectile in flight (foreshortened depth shrink) ---------------
     if (state.projectile) {
       const p = state.projectile;
-      // Depth in [0,1]: 0 = leaving the arm (near camera), 1 = at the wall
-      // plane (far from camera). The wall is a flat plane at world-x = WALL_X
-      // facing the catapult; reaching its front face means depth=1, regardless
-      // of which lateral column gets hit. World-x is monotonic (vx > 0
-      // throughout flight) so depth increases smoothly and continuously.
+      // Depth = 0 at launch (near camera) → 1 at the wall plane (far).
       const depth = Math.max(0, Math.min(1, (p.x - PIVOT_X) / (WALL_X - PIVOT_X)));
 
-      // --- Lateral (screen-x): converge on the column the boulder hits ----
-      // At depth=0 the boulder leaves the arm tip (screen center). At
-      // depth=1 it should reach the screen-x of the wall column it's about
-      // to strike. Map the boulder's CURRENT world-x to the OTS wall band:
-      // world WALL_X..WALL_X+WALL_W spans screen fwallX..fwallX+fwallW.
-      // (Boulders short of the wall extrapolate naturally — the screen-x
-      // they would land at if the wall extended toward them.)
-      const wallTargetX = fwallX + ((p.x - WALL_X) / WALL_W) * fwallW;
+      // Lateral mapping: arm tip → screen-x of the column the boulder will hit.
+      const wallTargetX = F_WALL_X + ((p.x - WALL_X) / WALL_W) * F_WALL_W;
       const px = armTipX + (wallTargetX - armTipX) * depth;
 
-      // --- Vertical (screen-y): launch tip down to wall horizon ----------
-      // World y at launch ~= PIVOT_Y - ARM_LEN; world y at wall band.
-      // Linear interp from arm tip to horizon, then add arc lift.
+      // Vertical: launch tip → horizon, plus arc lift from world parabola.
       const launchScreenY = armTipY;
       const wallScreenY   = HORIZON;
       const baseY = launchScreenY + (wallScreenY - launchScreenY) * depth;
-      // Arc lift: how far above the side-view wall-top the projectile is.
-      const arcLift = Math.max(0, (WALL_TOP_Y - p.y));   // px above wall top
+      const arcLift = Math.max(0, (WALL_TOP_Y - p.y));
       const py = baseY - arcLift * (0.45 + 0.35 * (1 - depth));
 
-      // --- Radius: dramatic shrink with depth ----------------------------
-      // Near (depth=0) → large stone leaving the trebuchet; far (depth=1) →
-      // small dot at the distant wall. Boulder reads bigger than fire/disease.
-      const rNear = p.kind === 'boulder' ? 16 : 12;
-      const rFar  = p.kind === 'boulder' ? 3  : 2.5;
+      // Radius: starts at launchR (max-pullback size), shrinks to ~3.
+      const rNear = Math.max(8, state.launchR);
+      const rFar  = 3;
       const r = rNear + (rFar - rNear) * depth;
 
-      ctx.fillStyle = ammoColor(p.kind);
+      ctx.fillStyle = T.fg;
       ctx.beginPath();
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
-      // Subtle outline so a big near-camera boulder reads as a 3D stone,
-      // not a flat fill.
-      if (p.kind === 'boulder' && r > 5) {
+      if (r > 5) {
         ctx.strokeStyle = 'rgba(0,0,0,0.45)';
         ctx.lineWidth = 1;
         ctx.stroke();
       }
-      if (p.kind === 'fire') {
-        ctx.strokeStyle = 'rgba(212,162,86,0.45)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        // Trail goes back toward the catapult tip (less depth = more visible).
-        ctx.moveTo(px, py + 4 + 6 * (1 - depth));
-        ctx.lineTo(px, py);
-        ctx.stroke();
-      }
     }
 
-    // --- HUD overlays -----------------------------------------------------
-    // Power bar mirrors the side view (for parity).
-    const power = Math.min(1, state.arm.pullMs / PULL_FULL_MS);
-    if (state.arm.pulling || power > 0.001) {
+    // --- HUD overlays ----------------------------------------------------
+    // Shot counter top-left.
+    ctx.fillStyle = T.fg;
+    ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Shot ' + Math.min(state.shotsFired + 1, FRONT_MAX_SHOTS) +
+                 '/' + FRONT_MAX_SHOTS, 10, 8);
+    if (state.lastResult && !state.gameOver) {
+      ctx.fillStyle = T.amber;
+      ctx.fillText(state.lastResult, 10, 24);
+    }
+
+    // Power bar (parity with side game).
+    if (state.arm.pulling || pullT > 0.001) {
       const barX = 16, barY = H - 18, barW = 140, barH = 8;
       ctx.fillStyle = T.bgElev;
       ctx.fillRect(barX, barY, barW, barH);
       ctx.fillStyle = T.amber;
-      ctx.fillRect(barX, barY, barW * power, barH);
+      ctx.fillRect(barX, barY, barW * pullT, barH);
       ctx.strokeStyle = T.rule;
       ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
       ctx.fillStyle = T.fgMuted;
@@ -762,48 +1142,40 @@ export function mount(rootEl) {
     ctx.lineWidth = 1;
     ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
 
+    // Idle prompt / game over.
     if (!state.projectile && !state.gameOver && !state.arm.pulling) {
       ctx.fillStyle = T.fgMuted;
       ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'top';
-      ctx.fillText('press anywhere — hold to wind', W - 10, 8);
+      ctx.fillText('hold canvas — boulder grows — release to fire', W - 10, 8);
     }
     if (state.gameOver) {
-      ctx.fillStyle = state.won ? T.teal : T.blood;
+      ctx.fillStyle = state.won ? T.amber : T.blood;
       ctx.font = 'bold 22px Iowan Old Style, Charter, Georgia, serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(state.won ? 'THE CROWN IS YOURS' : 'THE SIEGE BREAKS', W / 2, 80);
+      ctx.fillText(state.won ? 'VICTORY' : 'THE SIEGE FAILS', W / 2, 80);
       ctx.fillStyle = T.fgMuted;
       ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
-      ctx.fillText('press "New siege" to play again', W / 2, 108);
+      if (state.won && state.wonCol >= 0) {
+        ctx.fillText('column ' + (state.wonCol + 1) + ' has fallen', W / 2, 108);
+      } else if (!state.won) {
+        ctx.fillText('no column toppled in 6 shots', W / 2, 108);
+      }
     }
   }
 
-  // ---- Render loop --------------------------------------------------------
-  let raf = 0;
-  let lastT = performance.now();
-
-  function loop(now) {
-    const dt = Math.min(0.05, (now - lastT) / 1000);
-    lastT = now;
-    step(dt);
-    drawSide(sideCtx);
-    drawFront(frontCtx);
-    raf = requestAnimationFrame(loop);
-  }
-
-  // ---- Boot ---------------------------------------------------------------
+  // ---- Boot ------------------------------------------------------------
   state = freshState();
   refreshControls();
-  refreshHud();
-  raf = requestAnimationFrame((t) => { lastT = t; loop(t); });
 
-  // ---- Cleanup ------------------------------------------------------------
-  return function cleanup() {
-    cancelAnimationFrame(raf);
-    cleanupTension();
-    rootEl.innerHTML = '';
+  return {
+    step,
+    draw,
+    cleanup: () => {
+      cleanupTension();
+      btnReset.removeEventListener('click', onReset);
+    },
   };
 }
