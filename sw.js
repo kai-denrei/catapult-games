@@ -2,7 +2,7 @@
    CATAPULT — service worker (vanilla, no Workbox)
    ============================================================= */
 /* Token rewritten by scripts/bust.sh on every cache bump. */
-const CB_TOKEN = 'b2287a85';
+const CB_TOKEN = 'fb6bf6f2';
 const CACHE_NAME = `catapult-${CB_TOKEN}`;
 const OFFLINE_URL = './offline.html';
 

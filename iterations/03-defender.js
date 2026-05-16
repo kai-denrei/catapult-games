@@ -5,7 +5,7 @@
 // Two INDEPENDENT games, side by side:
 //   SIDE PROFILE  — the original siege: 6 shots, 3 ammo types, breach the wall.
 //   SAXON CASTLE  — over-the-shoulder column-knock: 6 shots, boulder only,
-//                   destroy any single vertical column (3 hits) to win.
+//                   destroy any single vertical column (4 hits) to win.
 //
 // Each panel has its own state, controls, pull-back gesture and win/lose loop.
 // One rAF loop drives both. mount(rootEl) is idempotent — a second call tears
@@ -51,7 +51,7 @@ const DISEASE_DAMAGE_BY_INDEX = [70, 60, 48, 34, 22, 12];
 const FRONT_MAX_SHOTS = 6;
 const FRONT_COLS      = 8;
 const FRONT_ROWS      = 4;
-const HITS_TO_FELL    = 3;       // hits to punch through the single column (3 bricks deep)
+const HITS_TO_FELL    = 4;       // hits to punch through the single column (4 bricks deep)
 // Sweet-spot aiming: a hit requires launchR to be within tolerance of SWEET_R.
 const FRONT_SWEET_R   = 22;      // ideal pull-back radius (px) for a clean hit
 const FRONT_SWEET_TOL = 7;       // ±7px tolerance window — wider now that the player has visible preview
@@ -1275,10 +1275,10 @@ function createFrontGame(refs, T) {
       }
     }
 
-    // --- Target column — single column, 3 bricks DEEP --------------------
-    // colDepth 3 = full bright front face. 2 = darker, slightly inset (front
-    // brick gone, next layer behind). 1 = even darker / smaller. 0 = sky
-    // showing through (a notch in the wall).
+    // --- Target column — single column, 4 bricks DEEP --------------------
+    // colDepth 4 = full bright front face. 3 = first brick gone, next layer
+    // showing slightly recessed. 2 = darker, more recessed. 1 = deepest brick
+    // almost broken. 0 = sky showing through (a notch in the wall).
     const colX = TARGET_COL_X;
     const colY = F_WALL_TOP;
     const colW = F_BRICK_W;
@@ -1286,9 +1286,10 @@ function createFrontGame(refs, T) {
     if (state.colDepth >= 1) {
       // Pick brightness + inset by remaining depth.
       const depthMap = {
-        3: { fill: '#6a5b42', inset: 0 },         // bright front face
-        2: { fill: '#4a4135', inset: 3 },         // recessed darker brick
-        1: { fill: '#2e2820', inset: 6 },         // deepest darker brick
+        4: { fill: '#7a6a4f', inset: 0 },         // bright front face (untouched)
+        3: { fill: '#6a5b42', inset: 2 },         // 1st layer gone — 2nd brick exposed
+        2: { fill: '#4a4135', inset: 5 },         // 2nd layer gone — 3rd brick visible
+        1: { fill: '#2e2820', inset: 8 },         // 3rd layer gone — last brick almost broken
       };
       const dm = depthMap[state.colDepth];
       // Empty notch around the inset brick (the void where the front layer was).
