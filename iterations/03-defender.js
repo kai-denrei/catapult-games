@@ -54,9 +54,26 @@ const FRONT_ROWS      = 4;
 const HITS_TO_FELL    = 3;       // hits to punch through the single column (3 bricks deep)
 // Sweet-spot aiming: a hit requires launchR to be within tolerance of SWEET_R.
 const FRONT_SWEET_R   = 22;      // ideal pull-back radius (px) for a clean hit
-const FRONT_SWEET_TOL = 5.5;     // ±5.5px tolerance window around the sweet spot
-// Straight-line flight duration (constant rate, no gravity, no arc).
-const FRONT_FLIGHT_MS = 800;     // ~800ms boulder-flight
+const FRONT_SWEET_TOL = 7;       // ±7px tolerance window — wider now that the player has visible preview
+// --- Front-view artillery ballistics (screen-space, no world units) ------
+// Gravity in screen px/s^2. Tuned so a launchR=FRONT_SWEET_R shot peaks
+// ~35-45px above the target column row and lands square on its mid-height.
+const FRONT_GRAVITY    = 600;
+// Initial launch speed (px/s) scales linearly with pullback radius. At
+// launchR=22 (sweet) → ~396 px/s total launch speed; min launchR=6 → 108;
+// max launchR=30 → 540. The target column sits ~96px above the launch
+// point, so the shot needs serious upward velocity to reach it.
+const FRONT_SPEED_PER_R = 18;
+// Launch direction: mostly upward, slightly forward toward the target column.
+// 87° from horizontal (i.e. nearly vertical) gives the characteristic
+// high-angle artillery arc we want in OTS view — target is mostly UP.
+const FRONT_LAUNCH_ANG = (87 * Math.PI) / 180;
+// Safety cap on flight time, so a wildly overshooting shot doesn't hang.
+const FRONT_FLIGHT_MAX_MS = 2200;
+// Trajectory preview during pullback.
+const PREVIEW_DOT_COUNT  = 14;       // dots along the predicted arc
+const PREVIEW_DOT_R      = 2.2;      // dot radius (px)
+const PREVIEW_TIME_STEP  = 0.08;     // seconds between sampled dots (~1.12s of arc coverage)
 
 // ---- Color tokens -------------------------------------------------------
 function readTokens(rootEl) {
@@ -680,64 +697,77 @@ function createFrontGame(refs, T) {
       const power = Math.min(1, ms / PULL_FULL_MS);
       // Boulder launch size = current pullback size.
       state.launchR = BOULDER_R_REST + (BOULDER_R_FULL - BOULDER_R_REST) * power;
-      fire(power);
+      fire();
       state.arm.angle = BEAM_REST_RAD;
     },
   });
 
-  // ---- Fire: spawn a straight-line projectile in SCREEN space -----------
-  // The arm whips forward visually (handled in draw via arm.angle reset),
-  // and a projectile object is created carrying its launch + target screen
-  // points plus an outcome that is decided up-front from the sweet-spot rule.
-  function fire(power) {
-    // Arm tip launch point — match the rest-pose tip position (the arm has
-    // whipped forward at this instant). We sample the same tip the draw fn
-    // would produce at BEAM_REST_RAD.
-    const launchX = BASE_CX;
-    const launchY = BASE_TOP_Y - BEAM_LEN * Math.cos(BEAM_REST_RAD);
+  // ---- Launch geometry helpers -----------------------------------------
+  // The arm tip in the rest pose — that's where the boulder leaves the cup
+  // (we visually snap the arm back to rest at the moment of release).
+  function launchPoint() {
+    return {
+      x: BASE_CX,
+      y: BASE_TOP_Y - BEAM_LEN * Math.cos(BEAM_REST_RAD),
+    };
+  }
+  // Initial velocity for a given pullback radius. The shot goes UP-and-
+  // slightly-FORWARD (toward the target column), with magnitude proportional
+  // to launchR. Returns { vx0, vy0 } in screen px/s (vy0 < 0 means upward).
+  function launchVelocity(launchR) {
+    const speed = launchR * FRONT_SPEED_PER_R;
+    // Horizontal direction = sign of (target - launch). In our layout this
+    // is positive (target column sits right of canvas centre), but keep the
+    // formula general.
+    const lp = launchPoint();
+    const dir = Math.sign(TARGET_COL_CX - lp.x) || 1;
+    const vx0 = dir * speed * Math.cos(FRONT_LAUNCH_ANG);
+    const vy0 = -speed * Math.sin(FRONT_LAUNCH_ANG);
+    return { vx0, vy0 };
+  }
 
-    // Outcome from sweet-spot aiming.
-    const diff = state.launchR - FRONT_SWEET_R;
-    let outcome;        // 'hit' | 'short' | 'over'
-    let targetX, targetY;
-    if (Math.abs(diff) <= FRONT_SWEET_TOL) {
-      outcome = 'hit';
-      // Aim straight at the centre of the target column on the wall plane.
-      targetX = TARGET_COL_CX;
-      targetY = TARGET_COL_Y_MID;
-    } else if (diff < 0) {
-      // Too short — boulder falls in the foreground between catapult and wall.
-      outcome = 'short';
-      // Land in the dirt band ahead of the catapult, biased toward the wall
-      // but never reaching it. Lerp landing distance with how-short-you-were.
-      const shortness = Math.min(1, -diff / (FRONT_SWEET_R - BOULDER_R_REST));
-      // shortness 0 = nearly made it; shortness 1 = barely left the cup.
-      const reach = 0.65 - 0.45 * shortness;   // 0.20..0.65 of distance to wall
-      targetX = launchX + (TARGET_COL_CX - launchX) * reach;
-      targetY = GROUND_Y - 4;                   // splash in the ground band
-    } else {
-      // Too long — boulder overshoots. Sails up & over the wall, vanishes
-      // near the top of the gatehouse / sky line.
-      outcome = 'over';
-      const overshoot = Math.min(1, diff / (BOULDER_R_FULL - FRONT_SWEET_R));
-      // Bias horizontally just past the column, but mostly the y is way above.
-      targetX = TARGET_COL_CX + 18 * (overshoot - 0.5);
-      targetY = TARGET_COL_Y_TOP - 30 - 30 * overshoot;
-    }
-
+  // ---- Fire: spawn a real ballistic projectile (screen-space physics) ---
+  function fire() {
+    const lp = launchPoint();
+    const { vx0, vy0 } = launchVelocity(state.launchR);
     state.projectile = {
-      // Straight-line interpolation parameters.
-      x0: launchX, y0: launchY,
-      x1: targetX, y1: targetY,
+      // Position + velocity (screen-space).
+      x:  lp.x,
+      y:  lp.y,
+      vx: vx0,
+      vy: vy0,
+      // Launch reference for the depth-shrink (horizontal-progress proxy).
+      x0: lp.x,
       r0: state.launchR,
-      r1: BOULDER_R_IMPACT,
       tMs: 0,
-      durMs: FRONT_FLIGHT_MS,
-      outcome,
-      // Current rendered position/size (updated in step).
-      px: launchX, py: launchY, pr: state.launchR,
+      // Current rendered size — updated in step from horizontal progress.
+      pr: state.launchR,
+      // Resolved on the frame the arc crosses a terminating plane.
+      outcome: null,    // 'hit' | 'short' | 'over' (set in step)
+      // Tracks whether the arc EVER passed above the wall top within the
+      // column band — used to classify post-flight outcome as 'over'.
+      sawAboveWall: false,
     };
     state.lastResult = '';
+  }
+
+  // Resolve the outcome of an in-flight projectile given the position it
+  // crossed a terminating plane at. Used inside step().
+  function resolveOutcome(p) {
+    const colHalfHit = F_BRICK_W / 2 + 4;
+    // Did we cross the wall plane at termination, within the column band?
+    if (p.y >= TARGET_COL_Y_MID && p.y <= F_WALL_BASE + 4 &&
+        Math.abs(p.x - TARGET_COL_CX) <= colHalfHit) {
+      return 'hit';
+    }
+    // Overshoot: arc sailed above the wall within the column band at any
+    // point during flight (tracked by p.sawAboveWall), OR the projectile
+    // exited off the top of the canvas.
+    if (p.sawAboveWall || p.y < F_WALL_TOP) {
+      return 'over';
+    }
+    // Otherwise: fell short, or splashed wide of the column.
+    return 'short';
   }
 
   function applyImpact(p) {
@@ -780,16 +810,61 @@ function createFrontGame(refs, T) {
     if (state.hitFlash > 0) state.hitFlash = Math.max(0, state.hitFlash - dt * 2.2);
     if (!state.projectile) return;
     const p = state.projectile;
+
+    // Integrate one frame of ballistics (semi-implicit Euler — matches the
+    // formula used by the trajectory preview so flight follows the dots).
+    p.vy += FRONT_GRAVITY * dt;
+    p.x  += p.vx * dt;
+    p.y  += p.vy * dt;
     p.tMs += dt * 1000;
-    const t = Math.min(1, p.tMs / p.durMs);
-    // Straight-line lerp from arm tip to target.
-    p.px = p.x0 + (p.x1 - p.x0) * t;
-    p.py = p.y0 + (p.y1 - p.y0) * t;
-    // Dramatic shrink.
-    p.pr = p.r0 + (p.r1 - p.r0) * t;
-    if (t >= 1) {
+
+    // Track whether the arc has sailed above the wall top inside the column
+    // band — this is how we distinguish an overshoot from a short or wide.
+    if (p.y < F_WALL_TOP &&
+        Math.abs(p.x - TARGET_COL_CX) <= F_BRICK_W / 2 + 4) {
+      p.sawAboveWall = true;
+    }
+
+    // Depth shrink driven by HORIZONTAL distance traveled (target-relative).
+    // 0 at launch x → 1 at target column centre.
+    const hSpan = TARGET_COL_CX - p.x0;
+    const hProg = hSpan !== 0
+      ? Math.min(1, Math.max(0, (p.x - p.x0) / hSpan))
+      : Math.min(1, p.tMs / 800);
+    p.pr = p.r0 + (BOULDER_R_IMPACT - p.r0) * hProg;
+
+    // --- Termination tests --------------------------------------------
+    // 1. Boulder crossed the wall plane on its way down within the column
+    //    band → CLEAN HIT.
+    if (p.vy > 0 &&
+        p.y >= TARGET_COL_Y_MID &&
+        Math.abs(p.x - TARGET_COL_CX) <= F_BRICK_W / 2 + 4) {
+      p.outcome = 'hit';
       applyImpact(p);
       endShot();
+      return;
+    }
+    // 2. Boulder hit the ground in the foreground (short, never reached wall).
+    if (p.y >= GROUND_Y - 2) {
+      p.outcome = resolveOutcome(p);
+      applyImpact(p);
+      endShot();
+      return;
+    }
+    // 3. Boulder sailed off-screen above / to the sides → over/wide.
+    if (p.x < -20 || p.x > W + 20 || p.y < -40) {
+      p.outcome = resolveOutcome(p);
+      applyImpact(p);
+      endShot();
+      return;
+    }
+    // 4. Safety timeout — should be unreachable but stops any pathological
+    //    hang from a weird tuning.
+    if (p.tMs > FRONT_FLIGHT_MAX_MS) {
+      p.outcome = resolveOutcome(p);
+      applyImpact(p);
+      endShot();
+      return;
     }
   }
 
@@ -1193,13 +1268,64 @@ function createFrontGame(refs, T) {
       armTipX = tip.tipX; armTipY = tip.tipY;
     }
 
-    // --- Projectile in flight — STRAIGHT LINE, dramatic shrink -----------
-    // Position and radius are computed in step(); we just render here.
+    // --- Trajectory preview (during pullback only) ----------------------
+    // A dotted amber arc showing where the boulder would land at the
+    // CURRENT pullback level. Recomputed every frame as pullT changes.
+    // Integrated with the SAME semi-implicit Euler used in flight, so the
+    // dots track the actual boulder path tightly.
+    if (state.arm.pulling && pullT > 0.02 && !state.projectile && !state.gameOver) {
+      const previewR = BOULDER_R_REST + (BOULDER_R_FULL - BOULDER_R_REST) * pullT;
+      const lp = launchPoint();
+      const { vx0, vy0 } = launchVelocity(previewR);
+      // Sub-step the integrator so the dots match what step() will draw.
+      const SUBSTEPS_PER_DOT = 6;
+      const subDt = PREVIEW_TIME_STEP / SUBSTEPS_PER_DOT;
+      let sx = lp.x, sy = lp.y, svx = vx0, svy = vy0;
+      ctx.save();
+      ctx.fillStyle = T.amber;
+      let drewLanding = false;
+      for (let i = 1; i <= PREVIEW_DOT_COUNT && !drewLanding; i++) {
+        for (let s = 0; s < SUBSTEPS_PER_DOT; s++) {
+          svy += FRONT_GRAVITY * subDt;
+          sx  += svx * subDt;
+          sy  += svy * subDt;
+        }
+        // Stop dotting once we cross the wall plane within the column band
+        // → mark a brighter terminal dot as the visual landing prediction.
+        if (svy > 0 && sy >= TARGET_COL_Y_MID &&
+            Math.abs(sx - TARGET_COL_CX) <= F_BRICK_W / 2 + 4) {
+          ctx.globalAlpha = 0.9;
+          ctx.beginPath();
+          ctx.arc(sx, sy, PREVIEW_DOT_R + 0.9, 0, Math.PI * 2);
+          ctx.fill();
+          drewLanding = true;
+          break;
+        }
+        // Splash terminal: hit ground or off-screen.
+        if (sy >= GROUND_Y - 2 || sx < 0 || sx > W || sy < -10) {
+          ctx.globalAlpha = 0.55;
+          ctx.beginPath();
+          ctx.arc(sx, sy, PREVIEW_DOT_R, 0, Math.PI * 2);
+          ctx.fill();
+          drewLanding = true;
+          break;
+        }
+        // Normal dot — fade with distance along arc.
+        const fade = 0.7 - 0.45 * (i / PREVIEW_DOT_COUNT);
+        ctx.globalAlpha = Math.max(0.18, fade);
+        ctx.beginPath();
+        ctx.arc(sx, sy, PREVIEW_DOT_R, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // --- Projectile in flight — ballistic arc with depth-shrink ---------
     if (state.projectile) {
       const p = state.projectile;
       ctx.fillStyle = T.fg;
       ctx.beginPath();
-      ctx.arc(p.px, p.py, Math.max(1, p.pr), 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, Math.max(1, p.pr), 0, Math.PI * 2);
       ctx.fill();
       if (p.pr > 4) {
         ctx.strokeStyle = 'rgba(0,0,0,0.5)';
@@ -1265,7 +1391,7 @@ function createFrontGame(refs, T) {
       ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'top';
-      ctx.fillText('hold — release in the teal band to hit', W - 10, 8);
+      ctx.fillText('hold — aim the dotted arc onto the column', W - 10, 8);
     }
     if (state.gameOver) {
       ctx.fillStyle = state.won ? T.amber : T.blood;
