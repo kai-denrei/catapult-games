@@ -23,12 +23,15 @@ const PROJECTILES_PER_LEVEL = 3;
 const GRAVITY = 1400;           // px / s^2
 const SUBSTEPS = 4;
 const CONSTRAINT_ITER = 6;      // PBD relaxation passes per substep
+const CONSTRAINT_ITER_REST = 10;// extra passes when system is near rest
 const DAMPING = 0.995;          // global velocity damping (per substep)
-const SLEEP_SPEED = 0.15;       // below this px/substep, snap to rest
-const GROUND_FRICTION = 0.7;
+const SLEEP_SPEED = 0.25;       // below this px/substep, snap to rest
+const REST_SPEED = 0.4;         // system-wide threshold for "near rest"
+const GROUND_FRICTION = 0.9;    // sticky at rest; less tangential creep
 const RESTITUTION = 0.05;       // collision bounce (low → reads as stone)
 const MAX_DRAG = 110;           // clamp drag magnitude (px)
-const LAUNCH_GAIN = 6.5;        // px/s of velocity per px of drag
+const LAUNCH_GAIN = 13.0;       // px/s of velocity per px of drag (2x for power)
+const PRESETTLE_TICKS = 90;     // off-screen settle passes before first frame
 
 const COLORS = {
   bg:        '#15171a',
@@ -256,15 +259,58 @@ function aabb(b) {
   return { minX, maxX, minY, maxY };
 }
 
+// Sleep blocks that are slow AND supported (touching ground or resting on
+// another supported block). This sweeps upward through the stack so a tall
+// pile can fully settle in one pass once the base is asleep.
 function sleepLowEnergy(blocks) {
-  for (const b of blocks) {
-    if (!b.alive) continue;
+  // Projectiles never sleep — they need to keep their momentum.
+  const live = blocks.filter((b) => b.alive && !b.isProjectile);
+  const supported = new Set();
+  // Seed: anything with a particle within 1.5px of the ground.
+  for (const b of live) {
     const ab = aabb(b);
-    if (ab.maxY < GROUND_Y - 1) continue; // only sleep grounded contacts
+    if (ab.maxY >= GROUND_Y - 1.5) supported.add(b);
+  }
+  // Iteratively grow: a block is supported if its AABB touches a supported
+  // block's AABB from above (its bottom near the other's top).
+  let added = true;
+  let guard = 0;
+  while (added && guard++ < 8) {
+    added = false;
+    for (const b of live) {
+      if (supported.has(b)) continue;
+      const ab = aabb(b);
+      for (const o of supported) {
+        const ob = aabb(o);
+        // Horizontal overlap?
+        if (ab.maxX < ob.minX - 1 || ab.minX > ob.maxX + 1) continue;
+        // b's bottom near o's top (within 2px)?
+        if (Math.abs(ab.maxY - ob.minY) <= 2) {
+          supported.add(b);
+          added = true;
+          break;
+        }
+      }
+    }
+  }
+  // Snap supported, slow blocks to rest.
+  for (const b of supported) {
     if (blockSpeed(b) < SLEEP_SPEED) {
       for (const p of b.particles) { p.px = p.x; p.py = p.y; }
     }
   }
+}
+
+// Aggregate maximum particle speed across all live blocks. Used to decide
+// whether to crank up constraint iterations during the resting phase.
+function maxBlockSpeed(blocks) {
+  let s = 0;
+  for (const b of blocks) {
+    if (!b.alive) continue;
+    const bs = blockSpeed(b);
+    if (bs > s) s = bs;
+  }
+  return s;
 }
 
 // ---------- level layout ----------
@@ -351,8 +397,38 @@ export function mount(rootEl) {
   reroll.style.marginLeft = '0.75rem';
   hud.appendChild(reroll);
 
+  // Run N off-screen physics ticks so the freshly-built stack settles into
+  // equilibrium with the ground/itself before the player sees anything.
+  // Without this, tiny RNG jitter + first-tick gravity inject velocity that
+  // reads as the castle "falling on its own."
+  function preSettle(stack, ticks) {
+    const dt = 1 / 60;
+    const sub_dt = dt / SUBSTEPS;
+    for (let t = 0; t < ticks; t++) {
+      for (let s = 0; s < SUBSTEPS; s++) {
+        integrate(stack, sub_dt);
+        // Use the higher rest-iteration count throughout settle.
+        for (let k = 0; k < CONSTRAINT_ITER_REST; k++) {
+          satisfyConstraints(stack);
+          resolveCollisions(stack);
+          groundConstraint(stack);
+        }
+        sleepLowEnergy(stack);
+      }
+    }
+    // Hard-snap any remaining tiny velocities to zero so the visible sim
+    // starts from a true rest state.
+    for (const b of stack) {
+      if (!b.alive) continue;
+      if (blockSpeed(b) < SLEEP_SPEED * 2) {
+        for (const p of b.particles) { p.px = p.x; p.py = p.y; }
+      }
+    }
+  }
+
   let seed = 2009;
   let blocks = buildLevel(seed);
+  preSettle(blocks, PRESETTLE_TICKS);
   let projectile = null;       // active flying block
   let shotsLeft = PROJECTILES_PER_LEVEL;
   let aiming = false;
@@ -382,6 +458,7 @@ export function mount(rootEl) {
   function resetLevel(newSeed) {
     if (typeof newSeed === 'number') seed = newSeed;
     blocks = buildLevel(seed);
+    preSettle(blocks, PRESETTLE_TICKS);
     projectile = null;
     shotsLeft = PROJECTILES_PER_LEVEL;
     setStatus('idle');
@@ -438,9 +515,13 @@ export function mount(rootEl) {
   // ---------- main loop ----------
   function physicsStep(dt) {
     const sub_dt = dt / SUBSTEPS;
+    // Stiffer relaxation when system is near rest — kills slow creep.
+    const iters = maxBlockSpeed(blocks) < REST_SPEED
+      ? CONSTRAINT_ITER_REST
+      : CONSTRAINT_ITER;
     for (let s = 0; s < SUBSTEPS; s++) {
       integrate(blocks, sub_dt);
-      for (let k = 0; k < CONSTRAINT_ITER; k++) {
+      for (let k = 0; k < iters; k++) {
         satisfyConstraints(blocks);
         resolveCollisions(blocks);
         groundConstraint(blocks);

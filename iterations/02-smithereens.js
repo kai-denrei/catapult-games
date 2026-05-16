@@ -40,8 +40,18 @@ const ARM_LEN          = 10;       // pixel length of the catapult arm
 const ARM_SWEEP_LO     = -Math.PI / 4;    // -45°
 const ARM_SWEEP_HI     =  Math.PI / 4;    // +45°
 const ARM_RATE         = 1.4;      // radians/sec — arm angular speed
-const RELOAD_MS        = 600;      // mandatory dead time between shots
-const ROCK_SPEED       = 78;       // initial launch speed (buffer px / sec)
+// Reload throttle removed (round-2 fix). The gesture of waiting for the arm
+// to swing back into the desired window is itself the rate-limiter — no need
+// for an extra dead time. A token 120ms guard remains only to prevent a
+// single key-release from registering as multiple fires within one frame.
+const RELOAD_MS        = 120;      // anti-double-fire guard; not gameplay throttle
+// ROCK_SPEED + GRAVITY tuning (round-2 fix): the inter-catapult distance is
+// ENEMY_X - PLAYER_X = 108 buffer px. Max horizontal range at 45° is v^2/g.
+// Old values (v=78, g=95) gave R ≈ 64 px — physically impossible to reach
+// the enemy. New values (v=130, g=95) give R ≈ 178 px, ~65% headroom over
+// the 108 px gap, so a well-aimed shot at the optimal arm-lock angle clearly
+// reaches the enemy catapult, and slightly off-optimal shots still arrive.
+const ROCK_SPEED       = 130;      // initial launch speed (buffer px / sec)
 const GRAVITY          = 95;       // buffer px / sec^2
 const HIT_FLASH_MS     = 220;
 
@@ -277,6 +287,15 @@ export function mount(rootEl) {
     if (r.y >= GROUND_Y - 1) return { kind: 'ground' };
     if (r.x < -4 || r.x > BUF_W + 4) return { kind: 'oob' };
 
+    // Friendly-fire rule (round-2 fix): a rock cannot collide with its
+    // own side's wall or catapult. Player rocks ('p') pass through the
+    // player wall and player catapult; enemy rocks ('e') pass through
+    // the enemy wall and enemy catapult. This lets the player launch
+    // without the arm scraping its own wall on low-angle shots, and
+    // matches Gerald's round-2 directive ("player 1's shell cannot
+    // destroy player 1's wall anymore").
+    const ownSide = (who) => (who === 'player' ? 'p' : 'e');
+
     // Walls are vertical brick stacks. Hitbox shrinks as bricks are
     // destroyed: only the *remaining* bricks block rocks.
     const ww = state.walls;
@@ -287,8 +306,12 @@ export function mount(rootEl) {
              r.y >= top && r.y < GROUND_Y;
     };
 
-    if (hitsWall(ww.player)) return { kind: 'wall', wall: ww.player, who: 'player' };
-    if (hitsWall(ww.enemy))  return { kind: 'wall', wall: ww.enemy,  who: 'enemy'  };
+    if (r.owner !== ownSide('player') && hitsWall(ww.player)) {
+      return { kind: 'wall', wall: ww.player, who: 'player' };
+    }
+    if (r.owner !== ownSide('enemy') && hitsWall(ww.enemy)) {
+      return { kind: 'wall', wall: ww.enemy,  who: 'enemy'  };
+    }
 
     // Catapults (small body). Hitbox is generous vertically so even small-
     // arc shots that just clear a downed wall still register on the body
@@ -297,8 +320,12 @@ export function mount(rootEl) {
       const cx = cat.x, cy = P_BASE_Y;
       return Math.abs(r.x - cx) < 6 && r.y > cy - ARM_LEN && r.y < cy + 3;
     };
-    if (inCatapult(state.player)) return { kind: 'catapult', who: 'player' };
-    if (inCatapult(state.enemy))  return { kind: 'catapult', who: 'enemy'  };
+    if (r.owner !== ownSide('player') && inCatapult(state.player)) {
+      return { kind: 'catapult', who: 'player' };
+    }
+    if (r.owner !== ownSide('enemy') && inCatapult(state.enemy)) {
+      return { kind: 'catapult', who: 'enemy'  };
+    }
 
     return null;
   }
@@ -306,13 +333,13 @@ export function mount(rootEl) {
   function resolveHit(r, hit) {
     const now = performance.now();
     if (hit.kind === 'wall') {
+      // checkRockCollision now filters own-wall impacts, so any wall hit
+      // here is by definition an enemy hit. No "own bricks" taunt needed.
       hit.wall.hp -= 1;
       hit.wall.flashUntil = now + HIT_FLASH_MS;
-      // Friendly fire on own wall still counts (rare but possible at low angles).
-      pushTaunt(r.owner, r.owner === 'p'
-        ? (hit.who === 'enemy' ? pick(rand, TAUNTS_HIT) : 'Stone on your own bricks.')
-        : (hit.who === 'player' ? pick(rand, TAUNTS_HIT) : 'They chip their own wall.'));
+      pushTaunt(r.owner, pick(rand, TAUNTS_HIT));
     } else if (hit.kind === 'catapult') {
+      // Likewise, only opponent-catapult hits reach here.
       if (hit.who === 'player' && r.owner === 'e') {
         state.player.hp = 0; state.player.flashUntil = now + HIT_FLASH_MS;
         state.winner = 'e';
@@ -321,12 +348,6 @@ export function mount(rootEl) {
         state.enemy.hp = 0; state.enemy.flashUntil = now + HIT_FLASH_MS;
         state.winner = 'p';
         pushTaunt('p', pick(rand, TAUNTS_WIN));
-      } else {
-        // Self-hit on own catapult — extremely awkward but possible.
-        const owner = hit.who === 'player' ? state.player : state.enemy;
-        owner.hp = 0; owner.flashUntil = now + HIT_FLASH_MS;
-        state.winner = (hit.who === 'player') ? 'e' : 'p';
-        pushTaunt(r.owner, 'Catastrophe in your own works.');
       }
     } else if (hit.kind === 'ground') {
       pushTaunt(r.owner, pick(rand, TAUNTS_MISS));

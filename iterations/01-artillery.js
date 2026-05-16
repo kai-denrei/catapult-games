@@ -3,48 +3,71 @@
 // Gesture preserved: numeric input of angle and power, then submit and see result.
 // The arc is plotted instantaneously after FIRE — there is no in-flight animation.
 //
+// Format: target practice. One user-controlled artillery on the left, one stationary
+// target on the right. Each FIRE is one shell; the result log at the top tracks the
+// sequence as `Shell N: HIT !` or `Shell N: FAIL X`. After three consecutive HITs
+// the player earns a small "MARKSMAN" line. Re-roll generates a new heightmap, wind,
+// target column, and clears the log.
+//
 // Rendering: ASCII into a <pre class="ascii-canvas"> styled by iterations.css.
 // Physics: lib/ballistics.js step() sampled in a tight loop.
 // Layout: mulberry32 heightmap, re-rollable via a button (seed += 1).
-//
-// AI: converging-aim heuristic. The opponent remembers the signed miss of its last
-// shot (along the line from itself to the player) and scales its power proportionally,
-// with a small random angle jitter so it never instantly locks on.
 
 import { step } from '../lib/ballistics.js';
 import { mulberry32 } from '../lib/rng.js';
 
 // --- grid geometry (characters) ---
-const COLS = 71;        // odd so cannons sit symmetric around a centre
+const COLS = 71;
 const ROWS = 22;
 const SKY = ' ';
 const GROUND = '_';
 const PEAK = '^';
-// Trails and impacts are intentionally distinct between shooter and AI so the
-// player can tell whose arc is whose at a glance. See bug fix v2: "1976 fires
-// two at once, confusing." Player gets the canonical period-trail of the era;
-// the AI gets a lighter, raised glyph and a hash impact.
-const TRAIL_YOU = '.';
-const TRAIL_AI = '\'';
-const HIT_YOU = '*';
-const HIT_AI = '#';
+
+// Trail glyph for in-flight samples; impact star for the endpoint.
+const TRAIL = '.';
+const HIT_MARK = '*';
+
+// --- two distinct ASCII actors ---
+// Player artillery: a small two-row catapult silhouette.
+//   Row above ground: "/=>"   (arm + barrel)
+//   Ground row:       "[#]"   (chassis sitting on the hill)
+// The chassis row replaces the surface chars under it; the arm row sits in the sky.
+const PLAYER_ARM    = ['/', '=', '>'];
+const PLAYER_BASE   = ['[', '#', ']'];
+const PLAYER_WIDTH  = 3;        // columns occupied
+const PLAYER_MUZZLE_OFFSET = 2; // arm tip relative to anchor column (0..2)
+
+// Target: a labelled bullseye, three columns wide.
+//   "(@)"
+const TARGET_GLYPHS = ['(', '@', ')'];
+const TARGET_WIDTH  = 3;
+
+// Hit tolerance in columns on either side of the target's hit-box edges.
+// Hit-box spans the three target columns; tolerance widens the acceptance to ±1 col.
+const HIT_TOLERANCE = 1;
 
 // --- physics scale: 1 char-cell == 1 unit, ground is at y = ROWS - 1 ---
-// gravity / wind / power are tuned so a power of 60 at 45° clears the field roughly.
-const DT = 0.05;          // seconds per step — coarse on purpose, ASCII sampling
-const MAX_STEPS = 600;    // hard cap so a bad shot can't loop forever
-const GRAVITY = 22;       // cell/s^2
-const POWER_SCALE = 0.55; // power 0..100 -> launch speed in cell/s
+const DT = 0.05;
+const MAX_STEPS = 600;
+const GRAVITY = 22;
+const POWER_SCALE = 0.55;
+
+// --- shell log presentation ---
+const MAX_LOG_ENTRIES = 6;       // entries shown on screen (oldest scrolls off)
+const MARKSMAN_STREAK = 3;       // consecutive HITs that earn the MARKSMAN line
 
 export function mount(rootEl) {
-  // Idempotency: wipe whatever is in the slot (the <noscript> fallback or a
-  // previous mount of this module).
+  // Idempotency: wipe whatever is in the slot.
   rootEl.innerHTML = '';
 
   // --- DOM ---
+  const log = el('p', 'widget-status');
+  log.setAttribute('aria-live', 'polite');
+  log.setAttribute('aria-label', 'Shell result log');
+
   const status = el('p', 'widget-status');
+
   const screen = el('pre', 'ascii-canvas');
-  screen.setAttribute('aria-live', 'polite');
   screen.setAttribute('aria-label', 'Artillery field, ASCII rendered');
 
   const controls = el('div', 'widget-controls');
@@ -80,50 +103,71 @@ export function mount(rootEl) {
   const result = el('p', 'widget-status');
 
   controls.append(angleLabel, powerLabel, fireBtn, rerollBtn);
-  rootEl.append(status, screen, controls, result);
+  rootEl.append(log, status, screen, controls, result);
 
   // --- game state ---
   let seed = 1976;
   let rng;
-  let heights;         // ground row index per column (smaller = higher)
-  let wind;            // signed integer, cells/s^2
-  let playerX;         // column of player cannon
-  let aiX;             // column of ai cannon
-  let lastFrame;       // char[ROWS][COLS] of the last rendered frame (trails persist within a round)
-  let gameOver;        // true if someone has won this round
-  // AI memory
-  let aiLastMiss;      // signed miss in player-ward direction (cells). null until first shot.
-  let aiLastPower;
-  let aiLastAngle;
+  let heights;          // ground row index per column (smaller = higher)
+  let wind;             // signed integer, cells/s^2
+  let playerX;          // anchor column of player chassis (left edge)
+  let targetX;          // anchor column of target (left edge)
+  let lastFrame;        // char[ROWS][COLS] of the last rendered frame (trails persist)
+  let shellNumber;      // next shell number to fire (1-based)
+  let shellLog;         // [{ n: int, hit: bool }, …] capped to MAX_LOG_ENTRIES
+  let hitStreak;        // consecutive HITs
 
   function newRound() {
     rng = mulberry32(seed);
     wind = Math.floor(rng() * 11) - 5; // -5..+5
     heights = buildHeightmap(rng);
+
+    // Player anchor: left edge of the chassis. Pull a few cols in from the wall.
     playerX = 3;
-    aiX = COLS - 4;
-    // ensure cannons sit on visible ground (not negative)
-    heights[playerX] = clamp(heights[playerX], 4, ROWS - 2);
-    heights[aiX] = clamp(heights[aiX], 4, ROWS - 2);
+    // Target anchor: somewhere on the right third, varied per seed.
+    const minTargetAnchor = Math.floor(COLS * 0.55);
+    const maxTargetAnchor = COLS - TARGET_WIDTH - 2;
+    targetX = minTargetAnchor + Math.floor(rng() * (maxTargetAnchor - minTargetAnchor + 1));
+
+    // Flatten the ground under the player and target so the glyphs sit cleanly.
+    flattenUnder(playerX, PLAYER_WIDTH);
+    flattenUnder(targetX, TARGET_WIDTH);
+
     lastFrame = renderBase();
-    gameOver = false;
-    aiLastMiss = null;
-    aiLastPower = 55;
-    aiLastAngle = 50;
+    shellNumber = 1;
+    shellLog = [];
+    hitStreak = 0;
     paint(lastFrame);
+
     status.textContent =
       `WIND: ${wind >= 0 ? '+' : ''}${wind}    SEED: ${seed}    ` +
-      `YOU: ${TRAIL_YOU}/${HIT_YOU}    AI: ${TRAIL_AI}/${HIT_AI}    ` +
       `Enter angle (0–90) and power (0–100), then FIRE.`;
     result.textContent = '';
+    renderLog(null);
+  }
+
+  function flattenUnder(anchor, width) {
+    // Pick the highest (smallest row index) ground cell under the span and apply
+    // it across, so the actor sits on a level platform and hit-detection on the
+    // target row is consistent.
+    let top = ROWS - 2;
+    for (let i = 0; i < width; i++) {
+      const x = anchor + i;
+      if (x < 0 || x >= COLS) continue;
+      if (heights[x] < top) top = heights[x];
+    }
+    top = clamp(top, 5, ROWS - 2);
+    for (let i = 0; i < width; i++) {
+      const x = anchor + i;
+      if (x < 0 || x >= COLS) continue;
+      heights[x] = top;
+    }
   }
 
   function buildHeightmap(rand) {
-    // Smooth 1D noise: sum of a couple of sine-ish waves plus per-column jitter.
-    // Output is ground-row index per column. Lower row index = taller hill.
     const h = new Array(COLS);
-    const baseRow = ROWS - 4;       // average ground line near the bottom
-    const amp = 5;                  // max hill height in rows
+    const baseRow = ROWS - 4;
+    const amp = 5;
     const phase1 = rand() * Math.PI * 2;
     const phase2 = rand() * Math.PI * 2;
     const freq1 = 1.2 + rand() * 1.6;
@@ -141,12 +185,10 @@ export function mount(rootEl) {
   }
 
   function renderBase() {
-    // Build a fresh ROWS×COLS grid containing only the terrain + cannons.
     const g = new Array(ROWS);
     for (let r = 0; r < ROWS; r++) g[r] = new Array(COLS).fill(SKY);
     for (let x = 0; x < COLS; x++) {
       const top = heights[x];
-      // surface character: peak if it's a local max, else underscore
       const isPeak =
         (x > 0 && x < COLS - 1) &&
         heights[x] < heights[x - 1] &&
@@ -154,11 +196,25 @@ export function mount(rootEl) {
       g[top][x] = isPeak ? PEAK : GROUND;
       for (let r = top + 1; r < ROWS; r++) g[r][x] = '#';
     }
-    // Cannons sit one row above the ground.
-    const pRow = heights[playerX] - 1;
-    const aRow = heights[aiX] - 1;
-    if (pRow >= 0) g[pRow][playerX] = '<';
-    if (aRow >= 0) g[aRow][aiX] = '>';
+
+    // Player artillery: chassis on the surface row, arm one row above.
+    const pTop = heights[playerX];
+    const pArmRow = pTop - 1;
+    for (let i = 0; i < PLAYER_WIDTH; i++) {
+      const x = playerX + i;
+      if (x < 0 || x >= COLS) continue;
+      g[pTop][x] = PLAYER_BASE[i];
+      if (pArmRow >= 0) g[pArmRow][x] = PLAYER_ARM[i];
+    }
+
+    // Target: glyphs on the surface row of the target span.
+    const tTop = heights[targetX];
+    for (let i = 0; i < TARGET_WIDTH; i++) {
+      const x = targetX + i;
+      if (x < 0 || x >= COLS) continue;
+      g[tTop][x] = TARGET_GLYPHS[i];
+    }
+
     return g;
   }
 
@@ -171,23 +227,22 @@ export function mount(rootEl) {
   }
 
   // --- shot simulation ---
-  // direction: +1 = firing rightward (player), -1 = firing leftward (ai).
-  // angle: degrees 0..90 above horizontal.
-  // power: 0..100.
-  // Returns { trail: [{x,y}], outcome: 'hit-player'|'hit-ai'|'hit-ground'|'offscreen', endX, endY }
-  function simulate(originX, originY, direction, angleDeg, power) {
+  // Returns { trail, outcome: 'hit-target'|'hit-ground'|'offscreen', endX, endY }
+  function simulate(originX, originY, angleDeg, power) {
     const a = (clamp(angleDeg, 0, 90) * Math.PI) / 180;
     const speed = clamp(power, 0, 100) * POWER_SCALE;
-    const vx0 = Math.cos(a) * speed * direction;
-    const vy0 = -Math.sin(a) * speed; // up == negative y in canvas/grid convention
-    // Start one cell ahead of the cannon mouth so we never "hit ourselves".
-    let s = { x: originX + direction, y: originY, vx: vx0, vy: vy0 };
+    const vx0 = Math.cos(a) * speed; // always firing right
+    const vy0 = -Math.sin(a) * speed;
+    // Start one cell ahead of the muzzle so we never collide with the player rig.
+    let s = { x: originX + 1, y: originY, vx: vx0, vy: vy0 };
     const env = { gravity: GRAVITY, wind: wind, drag: 0 };
     const trail = [{ x: s.x, y: s.y }];
     let outcome = 'offscreen';
     let endX = s.x, endY = s.y;
+    const tTop = heights[targetX];
+    const tLeft = targetX - HIT_TOLERANCE;
+    const tRight = targetX + TARGET_WIDTH - 1 + HIT_TOLERANCE;
     for (let i = 0; i < MAX_STEPS; i++) {
-      const prev = s;
       s = step(s, DT, env);
       trail.push({ x: s.x, y: s.y });
       const col = Math.round(s.x);
@@ -206,123 +261,97 @@ export function mount(rootEl) {
         // still climbing above the screen — keep flying, just don't draw
         continue;
       }
-      // Player cannon collision (only if this isn't the shooter)
-      if (direction !== 1 && col === playerX && row >= heights[playerX] - 1) {
-        outcome = 'hit-player';
+      // Target hit: projectile reaches the target's surface row (or below) within
+      // the tolerance-widened column band.
+      if (col >= tLeft && col <= tRight && row >= tTop) {
+        outcome = 'hit-target';
         break;
       }
-      if (direction !== -1 && col === aiX && row >= heights[aiX] - 1) {
-        outcome = 'hit-ai';
-        break;
-      }
-      // Terrain collision: projectile entered or passed below the ground line.
+      // Terrain collision elsewhere.
       if (row >= heights[col]) {
         outcome = 'hit-ground';
         break;
       }
-      // Suppress: if prev step was below ground due to off-screen-top wrap-around,
-      // we'd never get here because the row<0 branch continues. No-op.
-      void prev;
     }
     return { trail, outcome, endX, endY };
   }
 
-  function drawTrail(grid, trail, outcome, side) {
-    // side: 'you' or 'ai' — picks the glyph set so the two arcs are legible.
-    const trailGlyph = side === 'ai' ? TRAIL_AI : TRAIL_YOU;
-    const hitGlyph = side === 'ai' ? HIT_AI : HIT_YOU;
+  function drawTrail(grid, trail, outcome) {
     // Plot the trail glyph at every sampled point that fits in the field,
-    // skipping the muzzle cell so the cannon glyph remains visible.
+    // skipping non-sky cells so we don't overwrite terrain or actors.
     for (let i = 1; i < trail.length - 1; i++) {
       const c = Math.round(trail[i].x);
       const r = Math.round(trail[i].y);
       if (r < 0 || r >= ROWS || c < 0 || c >= COLS) continue;
-      const cur = grid[r][c];
-      if (cur === SKY) grid[r][c] = trailGlyph;
+      if (grid[r][c] === SKY) grid[r][c] = TRAIL;
     }
     // Endpoint mark.
     const last = trail[trail.length - 1];
     const lc = Math.round(last.x);
     const lr = Math.round(last.y);
     if (lr >= 0 && lr < ROWS && lc >= 0 && lc < COLS) {
-      grid[lr][lc] = hitGlyph;
+      grid[lr][lc] = HIT_MARK;
     }
     return outcome;
   }
 
-  // --- AI ---
-  function aiShoot() {
-    // First shot: a sensible opening guess biased toward the player.
-    // Subsequent shots: adjust power using last miss along the player-ward axis.
-    let angle, power;
-    const jitter = () => (Math.random() - 0.5);
-    if (aiLastMiss === null) {
-      angle = 45 + jitter() * 8;
-      power = 55 + jitter() * 8;
-    } else {
-      // AI fires LEFT toward the player. aiLastMiss = endX - playerX:
-      //   endX > playerX → projectile fell SHORT (didn't reach player) → +miss → need MORE power
-      //   endX < playerX → projectile OVERSHOT past the player → -miss → need LESS power
-      // So adjustment adds when short, subtracts when long.
-      const adjust = aiLastMiss * 0.9;
-      power = clamp(aiLastPower + adjust + jitter() * 4, 15, 95);
-      angle = clamp(aiLastAngle + jitter() * 6, 25, 75);
+  // --- shell log ---
+  function renderLog(flashHit) {
+    if (shellLog.length === 0) {
+      log.textContent = 'Shell log: (no shells fired)';
+      log.style.color = '';
+      return;
     }
-    const originY = heights[aiX] - 1;
-    const shot = simulate(aiX, originY, -1, angle, power);
-    aiLastAngle = angle;
-    aiLastPower = power;
-    aiLastMiss = shot.endX - playerX;
-    drawTrail(lastFrame, shot.trail, shot.outcome, 'ai');
-    return shot;
+    const parts = shellLog.map(
+      (e) => `Shell ${e.n}: ${e.hit ? 'HIT !' : 'FAIL X'}`
+    );
+    let line = parts.join('   ');
+    if (hitStreak >= MARKSMAN_STREAK) {
+      line += `   — MARKSMAN (${hitStreak} in a row)`;
+    }
+    log.textContent = line;
+    // Briefly tint the log on a hit. We can't easily un-flash without a timer, so
+    // we just toggle on every render: HIT shows amber, FAIL/empty resets.
+    log.style.color = flashHit ? 'var(--amber, #d4a256)' : '';
+  }
+
+  function appendShell(n, hit) {
+    shellLog.push({ n, hit });
+    if (shellLog.length > MAX_LOG_ENTRIES) shellLog.shift(); // scroll oldest off
+    hitStreak = hit ? hitStreak + 1 : 0;
   }
 
   // --- turn handler ---
   function fire() {
-    if (gameOver) {
-      newRound();
-      return;
-    }
     const angle = Number(angleInput.value);
     const power = Number(powerInput.value);
     if (!Number.isFinite(angle) || !Number.isFinite(power)) {
       result.textContent = 'Enter numeric angle and power.';
       return;
     }
-    const originY = heights[playerX] - 1;
-    const playerShot = simulate(playerX, originY, +1, angle, power);
-    drawTrail(lastFrame, playerShot.trail, playerShot.outcome, 'you');
-
-    if (playerShot.outcome === 'hit-ai') {
-      paint(lastFrame);
-      result.textContent = `YOU (${TRAIL_YOU}/${HIT_YOU}): DIRECT HIT. You win. Press FIRE for a new round.`;
-      gameOver = true;
-      return;
-    }
-
-    // AI responds.
-    const aiShot = aiShoot();
+    const muzzleCol = playerX + PLAYER_MUZZLE_OFFSET;
+    const muzzleRow = heights[playerX] - 1;
+    const shot = simulate(muzzleCol, muzzleRow, angle, power);
+    drawTrail(lastFrame, shot.trail, shot.outcome);
     paint(lastFrame);
 
-    if (aiShot.outcome === 'hit-player') {
-      result.textContent =
-        `YOU (${TRAIL_YOU}/${HIT_YOU}): ${describeMiss(playerShot, aiX)}.  |  ` +
-        `AI (${TRAIL_AI}/${HIT_AI}, a${Math.round(aiLastAngle)} p${Math.round(aiLastPower)}): DIRECT HIT. You lose. Press FIRE for a new round.`;
-      gameOver = true;
-      return;
-    }
+    const hit = shot.outcome === 'hit-target';
+    appendShell(shellNumber, hit);
+    renderLog(hit);
 
-    const yourMiss = describeMiss(playerShot, aiX);
-    const aiMiss = describeMiss(aiShot, playerX);
-    result.textContent =
-      `YOU (${TRAIL_YOU}/${HIT_YOU}): ${yourMiss}.  |  ` +
-      `AI (${TRAIL_AI}/${HIT_AI}, a${Math.round(aiLastAngle)} p${Math.round(aiLastPower)}): ${aiMiss}.`;
+    if (hit) {
+      result.textContent = `Shell ${shellNumber}: HIT ! Direct strike on the target.`;
+    } else {
+      result.textContent = `Shell ${shellNumber}: FAIL X — ${describeMiss(shot)}.`;
+    }
+    shellNumber += 1;
   }
 
-  function describeMiss(shot, targetX) {
+  function describeMiss(shot) {
     if (shot.outcome === 'offscreen') return 'lost off-screen';
-    const dx = Math.round(shot.endX - targetX);
-    if (dx === 0) return 'on target but blocked';
+    const targetCenter = targetX + (TARGET_WIDTH - 1) / 2;
+    const dx = Math.round(shot.endX - targetCenter);
+    if (dx === 0) return 'on line but blocked';
     if (dx > 0) return `${dx} long`;
     return `${-dx} short`;
   }
