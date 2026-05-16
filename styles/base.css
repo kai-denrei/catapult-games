@@ -301,3 +301,18 @@ a:hover { color: var(--amber); }
   body { background: #fff; color: #111; }
   .widget canvas { border: 1px solid #999; }
 }
+
+/* ---- Build stamp (cache-bust token, surfaced in footer) -- */
+.build-stamp {
+  margin-top: 1.25rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  opacity: 0.6;
+}
+.build-stamp a {
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--rule);
+}
+.build-stamp a:hover { color: var(--teal); border-bottom-color: var(--teal); }
