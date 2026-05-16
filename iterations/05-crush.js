@@ -18,7 +18,7 @@ const SLING_X = 120;
 const SLING_Y = 300;
 const SLING_TOP = 270;          // where projectile sits before launch
 const PROJECTILE_RADIUS = 9;
-const PROJECTILES_PER_LEVEL = 3;
+const PROJECTILES_PER_LEVEL = 10;
 
 const GRAVITY = 1400;           // px / s^2
 const SUBSTEPS = 4;

@@ -44,9 +44,6 @@ const FIRE_DAMAGE   = 22;                  // Greek fire base damage to garrison
 // Disease damage scales with how early it is used. Index 0 = first shot.
 const DISEASE_DAMAGE_BY_INDEX = [70, 60, 48, 34, 22, 12];
 
-// Approx distance from catapult to wall in world units (used to map x->depth in front view).
-const WALL_DEPTH_X  = WALL_X + WALL_W / 2 - PIVOT_X;
-
 // Color tokens — read from CSS vars at mount, fall back to literals.
 function readTokens(rootEl) {
   const cs = getComputedStyle(rootEl);
@@ -686,33 +683,51 @@ export function mount(rootEl) {
     // --- The projectile in flight, foreshortened --------------------------
     if (state.projectile) {
       const p = state.projectile;
-      // Map world-x distance from pivot to depth ratio in [0,1] (0 = at us,
-      // 1 = at wall). Clamp.
-      const depth = Math.max(0, Math.min(1, (p.x - PIVOT_X) / WALL_DEPTH_X));
-      // Lateral position: mostly stays near vanishing point. Tiny lateral
-      // jitter to read as physical (we don't have a real lateral component;
-      // the world is 2D). Keep it dead-center.
-      const px = VPX;
-      // Vertical: the side-view world y maps to a screen y between the
-      // catapult tip (near camera) and the horizon (at wall). Above-wall
-      // arc rises above HORIZON.
-      // World y at launch ~= PIVOT_Y - ARM_LEN; world y at wall ~= WALL_TOP_Y..WALL_BASE_Y.
-      // We use a simple linear interp from launch y to wall y by depth, then
-      // overlay the arc rise: the higher the arc above wall_top, the higher
-      // the dot floats above HORIZON.
-      const launchScreenY = baseTop - 30;
+      // Depth in [0,1]: 0 = leaving the arm (near camera), 1 = at the wall
+      // plane (far from camera). The wall is a flat plane at world-x = WALL_X
+      // facing the catapult; reaching its front face means depth=1, regardless
+      // of which lateral column gets hit. World-x is monotonic (vx > 0
+      // throughout flight) so depth increases smoothly and continuously.
+      const depth = Math.max(0, Math.min(1, (p.x - PIVOT_X) / (WALL_X - PIVOT_X)));
+
+      // --- Lateral (screen-x): converge on the column the boulder hits ----
+      // At depth=0 the boulder leaves the arm tip (screen center). At
+      // depth=1 it should reach the screen-x of the wall column it's about
+      // to strike. Map the boulder's CURRENT world-x to the OTS wall band:
+      // world WALL_X..WALL_X+WALL_W spans screen fwallX..fwallX+fwallW.
+      // (Boulders short of the wall extrapolate naturally — the screen-x
+      // they would land at if the wall extended toward them.)
+      const wallTargetX = fwallX + ((p.x - WALL_X) / WALL_W) * fwallW;
+      const px = armTipX + (wallTargetX - armTipX) * depth;
+
+      // --- Vertical (screen-y): launch tip down to wall horizon ----------
+      // World y at launch ~= PIVOT_Y - ARM_LEN; world y at wall band.
+      // Linear interp from arm tip to horizon, then add arc lift.
+      const launchScreenY = armTipY;
       const wallScreenY   = HORIZON;
       const baseY = launchScreenY + (wallScreenY - launchScreenY) * depth;
       // Arc lift: how far above the side-view wall-top the projectile is.
       const arcLift = Math.max(0, (WALL_TOP_Y - p.y));   // px above wall top
       const py = baseY - arcLift * (0.45 + 0.35 * (1 - depth));
-      // Radius: shrink with depth.
-      const r0 = p.kind === 'boulder' ? 7 : 6;
-      const r  = Math.max(1.5, r0 * (1 - 0.75 * depth));
+
+      // --- Radius: dramatic shrink with depth ----------------------------
+      // Near (depth=0) → large stone leaving the trebuchet; far (depth=1) →
+      // small dot at the distant wall. Boulder reads bigger than fire/disease.
+      const rNear = p.kind === 'boulder' ? 16 : 12;
+      const rFar  = p.kind === 'boulder' ? 3  : 2.5;
+      const r = rNear + (rFar - rNear) * depth;
+
       ctx.fillStyle = ammoColor(p.kind);
       ctx.beginPath();
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
+      // Subtle outline so a big near-camera boulder reads as a 3D stone,
+      // not a flat fill.
+      if (p.kind === 'boulder' && r > 5) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
       if (p.kind === 'fire') {
         ctx.strokeStyle = 'rgba(212,162,86,0.45)';
         ctx.lineWidth = 2;

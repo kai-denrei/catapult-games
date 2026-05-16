@@ -117,7 +117,10 @@ export function mount(rootEl) {
   let raf = 0;
   let lastShotTrail = [];     // current shot's trail, drawn each frame
   // AI memory (only used when it's the AI's turn to fire)
-  let aiLastAngle = 130;
+  // Note: AI angles are direction-RELATIVE (see launch() comment) — 0..90 forward,
+  // 90..180 backward. So 50° = "high arc toward target" from the AI's frame,
+  // which after the direction=-1 flip becomes a leftward shot in world space.
+  let aiLastAngle = 50;
   let aiLastPower = 55;
   let aiLastTargetMissX = null;  // signed: + = landed past the player (overshoot along firing axis)
   let aiLastTargetMissY = null;  // signed: + = landed below the player's head (too low / steep)
@@ -137,7 +140,7 @@ export function mount(rootEl) {
     inFlight = false;
     gameOver = false;
     lastShotTrail = [];
-    aiLastAngle = 130;
+    aiLastAngle = 50;
     aiLastPower = 75;
     aiLastTargetMissX = null;
     aiLastTargetMissY = null;
@@ -361,14 +364,15 @@ export function mount(rootEl) {
     let angle, power;
     const jitter = () => (Math.random() - 0.5);
     if (aiLastTargetMissX === null) {
-      // Opening shot. AI is on the right, so direction = -1 and "forward"
-      // angles are 91..179. 130° is a comfortable high-arc default.
-      // Power 75 lands somewhat short on a 474px field at 50° elevation
-      // (vacuum range ~366 px); the feedback loop dials it in within 2-3 shots.
-      angle = 130 + jitter() * 10;
+      // Opening shot. launch() takes a direction-relative angle: 0 = horizontal
+      // toward target, 90 = straight up, 180 = backward. AI uses direction = -1,
+      // so 50° here means "high arc, forward (= leftward in world space)".
+      // Power 75 at 50° gives projected range ~366 px on a ~474 px field —
+      // lands somewhat short of P1; the feedback loop dials it in.
+      angle = 50 + jitter() * 10;
       power = 75 + jitter() * 8;
     } else {
-      const missX = aiLastTargetMissX;       // + = overshot past player
+      const missX = aiLastTargetMissX;       // + = landed past player (toward AI's "forward")
       // Reduce power per pixel of overshoot. The factor was tuned by hand
       // so that a 100px miss becomes a ~10pt power correction.
       const dPower = clamp(missX * 0.10, -22, 22);
@@ -376,7 +380,7 @@ export function mount(rootEl) {
       // Angle jitter is wider when the last shot was a clear off-screen or
       // off-by-a-lot miss — odds are a building blocked the path.
       const wide = Math.abs(missX) > 80 ? 12 : 4;
-      angle = clamp(aiLastAngle + jitter() * wide, 95, 175);
+      angle = clamp(aiLastAngle + jitter() * wide, 25, 80);
     }
     aiLastAngle = angle;
     aiLastPower = power;
